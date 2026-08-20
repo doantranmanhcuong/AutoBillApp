@@ -147,7 +147,15 @@ with col_right:
                     "ghi_chu": str(item.get("Ghi chú") or "")
                 })
 
-            tong_tien_hang = sum(item.get("thanh_tien", 0) for item in ds_chuan)
+            # [BẢO VỆ] Tính toán tổng tiền an toàn chống lỗi nan
+            tong_tien_hang = 0.0
+            for item in ds_chuan:
+                val = item.get("thanh_tien", 0)
+                if pd.notna(val):
+                    try:
+                        tong_tien_hang += float(val)
+                    except ValueError:
+                        pass
             
             st.markdown("---")
             col_t1, col_t2, col_t3 = st.columns(3)
@@ -158,6 +166,11 @@ with col_right:
                 st.metric("Tiền thuế GTGT:", f"{tien_thue:,.0f} đ")
             with col_t3:
                 tong_thanh_toan = tong_tien_hang + tien_thue
+                
+                # [BẢO VỆ] Đảm bảo tong_thanh_toan là số hợp lệ trước khi đọc chữ
+                if pd.isna(tong_thanh_toan):
+                    tong_thanh_toan = 0.0
+
                 st.metric("Tổng cộng thanh toán:", f"{tong_thanh_toan:,.0f} đ")
                 chu_so_tien = doc_so_tien_vn(tong_thanh_toan)
                 st.markdown(f"*(Bằng chữ: {chu_so_tien})*")
