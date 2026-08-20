@@ -41,10 +41,24 @@ with col_left:
     if uploaded_file:
         file_ext = uploaded_file.name.split('.')[-1].lower()
         
-        # Tạo file tạm trong thư mục Temp của Hệ điều hành
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
-            tmp_file.write(uploaded_file.getbuffer())
-            temp_input = tmp_file.name  
+        # [CƠ CHẾ QUẢN LÝ FILE SIÊU SẠCH & THÔNG MINH]
+        # Kiểm tra xem đây có phải là file mới không
+        if 'uploaded_filename' not in st.session_state or st.session_state['uploaded_filename'] != uploaded_file.name:
+            # Nếu người dùng vừa tải file khác lên, xóa ngay file tạm của hóa đơn cũ đi cho nhẹ server
+            if 'temp_path' in st.session_state and os.path.exists(st.session_state['temp_path']):
+                try:
+                    os.remove(st.session_state['temp_path'])
+                except Exception:
+                    pass
+            
+            # Lưu file mới vào thư mục tạm đúng 1 lần duy nhất
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
+                tmp_file.write(uploaded_file.getbuffer())
+                st.session_state['temp_path'] = tmp_file.name
+                st.session_state['uploaded_filename'] = uploaded_file.name
+
+        # Luôn lấy đường dẫn file từ bộ nhớ tạm, giữ cho file sống chừng nào chưa F5
+        temp_input = st.session_state['temp_path']
             
         with st.container(border=True):
             if file_ext in ['png', 'jpg', 'jpeg']: 
@@ -126,26 +140,50 @@ with col_right:
                 gia = float(item.get("don_gia") or 0)
                 sl = float(item.get("so_luong") or 0)
                 fmt_data.append({
-                    "Tên hàng hóa": item.get("ten_hang_hoa", ""), "Mục đích SD": item.get("muc_dich_su_dung", ""), 
-                    "Tồn kho": "", "Nhà CC": ai_flat_data.get('ten_cong_ty', ''),
-                    "ĐVT": item.get("don_vi_tinh", ""), "Số lượng": sl, "Đơn giá": gia, 
-                    "Thành tiền": item.get("thanh_tien", sl * gia), "Ghi chú": item.get("ghi_chu", "")
+                    "Tên hàng hóa": item.get("ten_hang_hoa", ""), 
+                    "Mục đích SD": item.get("muc_dich_su_dung", ""), 
+                    "Tồn kho": item.get("ton_kho", ""), 
+                    "Nhà CC": item.get("nha_cung_cap", ai_flat_data.get('ten_cong_ty', '')),
+                    "ĐVT": item.get("don_vi_tinh", ""), 
+                    "Số lượng": sl, 
+                    "Đơn giá": gia, 
+                    "Thành tiền": item.get("thanh_tien", sl * gia), 
+                    "Ghi chú": item.get("ghi_chu", "")
                 })
             
             edited_df = st.data_editor(pd.DataFrame(fmt_data), num_rows="dynamic", use_container_width=True, hide_index=True)
             danh_sach_da_chinh_sua = edited_df.to_dict('records')
 
             ds_chuan = []
+            need_rerun = False
+            
             for item in danh_sach_da_chinh_sua:
                 ten_hh = str(item.get("Tên hàng hóa") or "").strip()
                 if not ten_hh or ten_hh == "None": continue 
+                
+                sl = float(item.get("Số lượng") or 0)
+                gia = float(item.get("Đơn giá") or 0)
+                
+                # Bắt Python tự động tính chuẩn
+                thanh_tien_chuan = sl * gia
+                thanh_tien_hien_tai = float(item.get("Thành tiền") or 0)
+                
+                # Bật cờ vẽ lại bảng nếu số tiền bị lệch
+                if thanh_tien_hien_tai != thanh_tien_chuan:
+                    need_rerun = True
+
                 ds_chuan.append({
-                    "ten_hang_hoa": ten_hh, "muc_dich": str(item.get("Mục đích SD") or ""),
+                    "ten_hang_hoa": ten_hh, "muc_dich_su_dung": str(item.get("Mục đích SD") or ""),
                     "ton_kho": str(item.get("Tồn kho") or ""), "nha_cung_cap": str(item.get("Nhà CC") or ""),
-                    "don_vi_tinh": str(item.get("ĐVT") or ""), "so_luong": float(item.get("Số lượng") or 0),
-                    "don_gia": float(item.get("Đơn giá") or 0), "thanh_tien": float(item.get("Thành tiền") or 0), 
+                    "don_vi_tinh": str(item.get("ĐVT") or ""), "so_luong": sl,
+                    "don_gia": gia, "thanh_tien": thanh_tien_chuan, 
                     "ghi_chu": str(item.get("Ghi chú") or "")
                 })
+
+            # Tải lại ngầm để hiển thị số Thành tiền mới
+            if need_rerun:
+                st.session_state['data']['danh_sach_hang_hoa'] = ds_chuan
+                st.rerun()
 
             # [BẢO VỆ] Tính toán tổng tiền an toàn chống lỗi nan
             tong_tien_hang = 0.0
