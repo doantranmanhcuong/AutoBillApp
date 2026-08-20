@@ -4,9 +4,10 @@ import pandas as pd
 import zipfile
 import io
 import base64
-import tempfile  # [MỚI] Thư viện tạo file tạm an toàn của Python
+import tempfile 
 from PIL import Image
 from docx import Document
+import fitz 
 
 from core.config import API_KEY, TEMPLATE_DIR
 from core.utils.helpers import doc_so_tien_vn, get_tags_from_template
@@ -40,20 +41,30 @@ with col_left:
     if uploaded_file:
         file_ext = uploaded_file.name.split('.')[-1].lower()
         
-        # [MỚI] Tạo file tạm trong thư mục Temp của Hệ điều hành, KHÔNG lưu vào thư mục code
+        # Tạo file tạm trong thư mục Temp của Hệ điều hành
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
             tmp_file.write(uploaded_file.getbuffer())
-            temp_input = tmp_file.name  # Lấy đường dẫn an toàn tuyệt đối
+            temp_input = tmp_file.name  
             
-        # Bỏ giới hạn height để khung tự co giãn, không che mất nút Fullscreen
         with st.container(border=True):
             if file_ext in ['png', 'jpg', 'jpeg']: 
                 st.image(Image.open(temp_input), use_container_width=True)
             elif file_ext == 'pdf':
-                with open(temp_input, "rb") as f:
-                    base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-                pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}#view=FitH&navpanes=0&toolbar=0" width="100%" height="900" type="application/pdf" style="border: none;"></iframe>'
-                st.markdown(pdf_display, unsafe_allow_html=True)
+                try:
+                    doc = fitz.open(temp_input)
+                    st.info(f"📄 Tài liệu PDF có tổng cộng {len(doc)} trang.")
+                    for page_num in range(len(doc)):
+                        page = doc.load_page(page_num)
+                        pix = page.get_pixmap(dpi=150)
+                        img_path = f"temp_page_{page_num}.png"
+                        pix.save(img_path)
+                        st.image(Image.open(img_path), caption=f"Trang {page_num + 1}", use_container_width=True)
+                        if os.path.exists(img_path):
+                            os.remove(img_path)
+                except Exception as e:
+                    st.error(f"Không thể hiển thị bản xem trước PDF: {str(e)}")
+                    with open(temp_input, "rb") as f:
+                        st.download_button("📥 Tải xuống file PDF gốc để xem", f, file_name=uploaded_file.name)
             elif file_ext == 'xlsx':
                 for sheet, df in pd.read_excel(temp_input, sheet_name=None).items(): 
                     st.dataframe(df, height=800, use_container_width=True)
