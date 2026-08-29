@@ -5,6 +5,24 @@ import re
 
 class DocumentBuilder:
     @staticmethod
+    def _replace_tag_in_paragraph(paragraph, search_key, val_str):
+        if search_key not in paragraph.text:
+            return
+
+        replaced = False
+        for run in paragraph.runs:
+            if search_key in run.text:
+                run.text = run.text.replace(search_key, val_str)
+                replaced = True
+        
+        if not replaced and search_key in paragraph.text:
+            full_text = paragraph.text.replace(search_key, val_str)
+            if paragraph.runs:
+                paragraph.runs[0].text = full_text
+                for run in paragraph.runs[1:]:
+                    run.text = ""
+
+    @staticmethod
     def fill_word_template(template_path, output_path, data_dict):
         doc = Document(template_path)
         danh_sach = data_dict.get("danh_sach_hang_hoa", [])
@@ -22,28 +40,31 @@ class DocumentBuilder:
                         
                         for cell in new_row.cells:
                             for p in cell.paragraphs:
-                                if "{stt}" in p.text: p.text = p.text.replace("{stt}", str(idx+1))
+                                if "{stt}" in p.text: 
+                                    DocumentBuilder._replace_tag_in_paragraph(p, "{stt}", str(idx+1))
                                 for k, v in item.items():
                                     search_key = f"{{{k}}}"
                                     if search_key in p.text:
                                         val_str = f"{v:,.0f}" if isinstance(v, (int, float)) and k in ["so_luong", "don_gia", "thanh_tien", "tong_cong"] else str(v if v is not None else "")
-                                        p.text = p.text.replace(search_key, val_str)
-                                p.text = re.sub(r'\{[a-z_]+\}', '', p.text)
+                                        DocumentBuilder._replace_tag_in_paragraph(p, search_key, val_str)
+                                
+                                for run in p.runs:
+                                    run.text = re.sub(r'\{[a-z_]+\}', '', run.text)
+                                    
                     parent_tbl.remove(template_row._tr)
-
-        def replace_text(paragraph, key, value):
-            search_key = f"{{{key}}}"
-            if search_key in paragraph.text:
-                val_str = f"{value:,.0f}" if isinstance(value, (int, float)) and key in ["tong_tien_hang", "thue_gtgt", "tong_thanh_toan", "tong_cong"] else str(int(value) if isinstance(value, float) and value.is_integer() else (value or ""))
-                paragraph.text = paragraph.text.replace(search_key, val_str)
 
         for key_name, value in data_dict.items():
             if isinstance(value, list): continue
-            for p in doc.paragraphs: replace_text(p, key_name, value)
+            search_key = f"{{{key_name}}}"
+            val_str = f"{value:,.0f}" if isinstance(value, (int, float)) and key_name in ["tong_tien_hang", "thue_gtgt", "tong_thanh_toan", "tong_cong"] else str(int(value) if isinstance(value, float) and value.is_integer() else (value or ""))
+            
+            for p in doc.paragraphs: 
+                DocumentBuilder._replace_tag_in_paragraph(p, search_key, val_str)
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
-                        for p in cell.paragraphs: replace_text(p, key_name, value)
+                        for p in cell.paragraphs: 
+                            DocumentBuilder._replace_tag_in_paragraph(p, search_key, val_str)
         
         doc.save(output_path)
         return True
