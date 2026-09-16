@@ -49,7 +49,8 @@ class AIExtractor:
             2. CÓ GÌ GHI NẤY: Trích xuất y hệt thông tin trên giấy. 
                - Trạng thái các cột: Tuyệt đối KHÔNG TỰ ĐOÁN mục đích sử dụng ("muc_dich_su_dung"). Nếu không ghi cột mục đích, bắt buộc để chuỗi rỗng "".
                - Với trường "ghi_chu": Chỉ ghi nhận nếu tài liệu có cột Ghi chú, hoặc có các cột phụ (như "Xuất xứ", "Quy cách") thì gộp chung vào. Nếu không có, để trống "".
-            3. Tính toán lại số liệu, ghi lỗi vào "danh_sach_canh_bao". Nếu chuẩn 100%, để mảng rỗng [].
+            3. XÁC ĐỊNH THUẾ VAT: Đọc kỹ tài liệu xem giá trên bảng kê/báo giá là ĐÃ BAO GỒM VAT hay CHƯA BAO GỒM VAT. Ghi vào `thong_tin_vat.da_bao_gom_vat` (true/false) và trích xuất `thue_suat` (ví dụ 8, 10, 5, 0. Mặc định 8 nếu không ghi rõ).
+            4. Tính toán lại số liệu, ghi lỗi vào "danh_sach_canh_bao". Nếu chuẩn 100%, để mảng rỗng [].
 
             CẤU TRÚC JSON BẮT BUỘC:
             {{
@@ -58,6 +59,7 @@ class AIExtractor:
               "thong_tin_khach_hang": {{"ten_khach_hang": "", "dia_chi": "", "ma_so_thue": ""}},
               "danh_sach_hang_hoa": [{{"stt": 1, "ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 0, "don_gia": 0, "thanh_tien": 0, "muc_dich_su_dung": "", "ghi_chu": ""}}],
               "tong_ket_tien": {{"tong_tien_truoc_thue": 0, "thue_suat_vat": "", "tien_thue_vat": 0, "tong_tien_thanh_toan": 0, "so_tien_viet_bang_chu": ""}},
+              "thong_tin_vat": {{"da_bao_gom_vat": false, "thue_suat": 8}},
               "thong_tin_dong": {{}},
               "danh_sach_canh_bao": []
             }}
@@ -69,6 +71,9 @@ class AIExtractor:
                 config={"response_mime_type": "application/json"}
             )
             
+            if not response or not response.text:
+                return {"error": "AI không phản hồi nội dung hoặc tài liệu không rõ nét. Vui lòng kiểm tra lại tài liệu."}
+
             text_result = response.text.strip()
             if text_result.startswith("```json"): text_result = text_result[7:-3].strip()
             elif text_result.startswith("```"): text_result = text_result[3:-3].strip()

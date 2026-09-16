@@ -28,7 +28,14 @@ def doc_so_tien_vn(n):
 
     s = ""
     group = 0
-    n_int = int(n)
+    try:
+        n_int = int(round(float(n)))
+    except (ValueError, TypeError):
+        return "Không đồng"
+        
+    if n_int == 0:
+        return "Không đồng"
+        
     while n_int > 0:
         chunk = n_int % 1000
         n_int = n_int // 1000
@@ -39,28 +46,30 @@ def doc_so_tien_vn(n):
     
     return s.strip().capitalize() + " đồng chẵn."
 
-def get_tags_from_template(file_path):
+def exhaustive_extract_tags(file_path):
+    """Quét toàn diện các thẻ {tag}, {{tag}}, {{{ tag }}} trong tệp docx và xlsx"""
     tags = set()
-    pattern = r'\{([^{}]+)\}' 
+    pattern = re.compile(r'\{+\s*([a-zA-Z0-9_]+)\s*\}+')
     try:
         if file_path.endswith('.docx'):
             doc = Document(file_path)
-            for p in doc.paragraphs: tags.update(re.findall(pattern, p.text))
+            for p in doc.paragraphs:
+                tags.update(pattern.findall(p.text))
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
-                        for p in cell.paragraphs: tags.update(re.findall(pattern, p.text))
+                        for p in cell.paragraphs:
+                            tags.update(pattern.findall(p.text))
         elif file_path.endswith('.xlsx'):
             wb = openpyxl.load_workbook(file_path, data_only=True)
             for sheet in wb.worksheets:
-                for row in sheet.iter_rows():
+                max_r = min(sheet.max_row or 1, 250)
+                max_c = min(sheet.max_column or 1, 40)
+                for row in sheet.iter_rows(max_row=max_r, max_col=max_c, values_only=True):
                     for cell in row:
-                        if cell.value and isinstance(cell.value, str):
-                            tags.update(re.findall(pattern, cell.value))
-    except Exception: pass
-
-    ignore_tags = {"stt", "ten_hang_hoa", "muc_dich", "ton_kho", "nha_cung_cap", 
-                   "don_vi_tinh", "so_luong", "don_gia", "gia_niem_yet", "gia_mua", 
-                   "thanh_tien", "ghi_chu", "tong_tien_hang", "thue_gtgt", 
-                   "tong_thanh_toan", "tong_cong", "so_tien_bang_chu"} 
-    return [t for t in tags if t not in ignore_tags]
+                        if isinstance(cell, str):
+                            tags.update(pattern.findall(cell))
+    except Exception:
+        pass
+        
+    return {t.strip().lower() for t in tags}

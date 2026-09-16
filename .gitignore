@@ -1,0 +1,31 @@
+# Môi trường và Khóa bí mật
+.env
+*.env
+
+# Môi trường ảo Python
+venv/
+.venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# File tạm và Tài liệu xuất ra
+temp_*
+temp_input.*
+temp_page_*
+scratch/
+HoSo_*
+BaoCao_*
+Bo_Ho_So_*
+*.zip
+*.tmp
+
+# Cấu hình trình soạn thảo (IDE)
+.vscode/
+.idea/
