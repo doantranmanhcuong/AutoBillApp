@@ -11,9 +11,10 @@ try:
 except ImportError:
     import fitz
 
-from core.config import API_KEY, TEMPLATE_DIR
+from core.config import API_KEY, API_KEYS, TEMPLATE_DIR
 from core.utils.helpers import doc_so_tien_vn, exhaustive_extract_tags
 from core.ai_extractor import AIExtractor
+from core.invoice_merger import InvoiceMerger
 from core.document_builder import DocumentBuilder
 from ui.components import apply_office_theme, display_financial_summary, display_zalo_message
 
@@ -28,6 +29,34 @@ st.set_page_config(
 # Nạp giao diện văn phòng chuẩn mực (đơn giản, trong sáng)
 apply_office_theme()
 
+def render_file_preview(file_name: str, file_path: str):
+    """Hiển thị nội dung xem trước tài liệu gốc (PDF, Ảnh, Excel, Word)"""
+    file_ext = file_name.split('.')[-1].lower()
+    with st.container(border=True):
+        if file_ext in ['png', 'jpg', 'jpeg']: 
+            st.image(file_path, use_container_width=True)
+        elif file_ext == 'pdf':
+            try:
+                doc = fitz.open(file_path)
+                st.caption(f"📄 Tài liệu PDF gồm {len(doc)} trang:")
+                for page_num in range(len(doc)):
+                    page = doc.load_page(page_num)
+                    pix = page.get_pixmap(dpi=150)
+                    img_bytes = pix.tobytes("png")
+                    st.image(img_bytes, caption=f"Trang {page_num + 1}", use_container_width=True)
+            except Exception as e:
+                st.warning(f"Không thể mở trực tiếp bản xem trước PDF: {str(e)}")
+                with open(file_path, "rb") as f:
+                    st.download_button("📥 Tải về file PDF gốc để xem", f, file_name=file_name, key=f"dl_{file_name}")
+        elif file_ext == 'xlsx':
+            for sheet, df in pd.read_excel(file_path, sheet_name=None).items(): 
+                st.caption(f"Trang tính: {sheet}")
+                clean_df = df.fillna("").astype(str)
+                st.dataframe(clean_df, height=500, use_container_width=True)
+        elif file_ext == 'docx':
+            text = "\n".join([p.text for p in Document(file_path).paragraphs])
+            st.text_area("Nội dung văn bản Word:", text, height=500, key=f"txt_{file_name}")
+
 # Tiêu đề ứng dụng
 st.markdown("### 📑 HỆ THỐNG LẬP HỒ SƠ & CHỨNG TỪ KẾ TOÁN")
 st.caption("Giải pháp tự động hóa lập chứng từ, đề nghị thanh toán và hợp đồng từ hóa đơn / báo giá")
@@ -39,9 +68,10 @@ available_templates = [f for f in os.listdir(TEMPLATE_DIR) if f.endswith(('.xlsx
 # BƯỚC 1: KHỞI TẠO HỒ SƠ
 col_top1, col_top2 = st.columns([1, 1], gap="medium")
 with col_top1:
-    uploaded_file = st.file_uploader(
-        "📁 1. Tải lên Hóa đơn / Báo giá (PDF, Ảnh, Word, Excel):", 
-        type=["png", "jpg", "jpeg", "xlsx", "docx", "pdf"]
+    uploaded_files = st.file_uploader(
+        "📁 1. Tải lên Hóa đơn / Báo giá (Cho phép chọn nhiều hóa đơn cùng NCC):", 
+        type=["png", "jpg", "jpeg", "xlsx", "docx", "pdf"],
+        accept_multiple_files=True
     )
 with col_top2:
     if available_templates:
@@ -55,66 +85,54 @@ with col_top2:
 
 st.markdown("---")
 
+# Quản lý danh sách file tạm an toàn cho nhiều file
+current_filenames = [f.name for f in uploaded_files] if uploaded_files else []
+if st.session_state.get('uploaded_filenames') != current_filenames:
+    old_temp_map = st.session_state.get('temp_files_map', {})
+    for p in old_temp_map.values():
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+    
+    new_temp_map = {}
+    for f in (uploaded_files or []):
+        f_ext = f.name.split('.')[-1].lower()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{f_ext}") as tmp_f:
+            tmp_f.write(f.getbuffer())
+            new_temp_map[f.name] = tmp_f.name
+            
+    st.session_state['temp_files_map'] = new_temp_map
+    st.session_state['uploaded_filenames'] = current_filenames
+    if 'data' in st.session_state:
+        del st.session_state['data']
+
+temp_files_map = st.session_state.get('temp_files_map', {})
+
 # BƯỚC 2 & 3: GIAO DIỆN 2 CỘT (CHỨNG TỪ GỐC & KIỂM DUYỆT)
 col_left, col_right = st.columns([4.8, 5.2], gap="large")
 
 # CỘT TRÁI: HIỂN THỊ CHỨNG TỪ GỐC
 with col_left:
     st.markdown("##### 🔍 TÀI LIỆU GỐC")
-    if uploaded_file:
-        file_ext = uploaded_file.name.split('.')[-1].lower()
-        
-        # Quản lý file tạm an toàn
-        if 'uploaded_filename' not in st.session_state or st.session_state['uploaded_filename'] != uploaded_file.name:
-            if 'temp_path' in st.session_state and os.path.exists(st.session_state['temp_path']):
-                try: 
-                    os.remove(st.session_state['temp_path'])
-                except Exception: 
-                    pass
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
-                tmp_file.write(uploaded_file.getbuffer())
-                st.session_state['temp_path'] = tmp_file.name
-                st.session_state['uploaded_filename'] = uploaded_file.name
-                # Xóa dữ liệu bóc tách cũ khi đổi file mới
-                if 'data' in st.session_state:
-                    del st.session_state['data']
-
-        temp_input = st.session_state['temp_path']
-            
-        with st.container(border=True):
-            if file_ext in ['png', 'jpg', 'jpeg']: 
-                st.image(temp_input, use_container_width=True)
-            elif file_ext == 'pdf':
-                try:
-                    doc = fitz.open(temp_input)
-                    st.caption(f"📄 Tài liệu PDF gồm {len(doc)} trang:")
-                    for page_num in range(len(doc)):
-                        page = doc.load_page(page_num)
-                        pix = page.get_pixmap(dpi=150)
-                        img_bytes = pix.tobytes("png")
-                        st.image(img_bytes, caption=f"Trang {page_num + 1}", use_container_width=True)
-                except Exception as e:
-                    st.warning(f"Không thể mở trực tiếp bản xem trước PDF: {str(e)}")
-                    with open(temp_input, "rb") as f:
-                        st.download_button("📥 Tải về file PDF gốc để xem", f, file_name=uploaded_file.name)
-            elif file_ext == 'xlsx':
-                for sheet, df in pd.read_excel(temp_input, sheet_name=None).items(): 
-                    st.caption(f"Trang tính: {sheet}")
-                    # Chuẩn hóa để tránh lỗi PyArrow với các file Excel có cột chứa kiểu dữ liệu hỗn hợp
-                    clean_df = df.fillna("").astype(str)
-                    st.dataframe(clean_df, height=600, use_container_width=True)
-            elif file_ext == 'docx':
-                text = "\n".join([p.text for p in Document(temp_input).paragraphs])
-                st.text_area("Nội dung văn bản Word:", text, height=600)
-    else:
+    if not uploaded_files:
         st.info("Vui lòng tải lên tài liệu ở Bước 1 để bắt đầu xem trước.")
+    elif len(uploaded_files) == 1:
+        f = uploaded_files[0]
+        render_file_preview(f.name, temp_files_map[f.name])
+    else:
+        st.caption(f"📑 Đã nạp {len(uploaded_files)} hóa đơn (Chuyển tab để xem từng file):")
+        file_tabs = st.tabs([f"📄 {f.name}" for f in uploaded_files])
+        for idx, f in enumerate(uploaded_files):
+            with file_tabs[idx]:
+                render_file_preview(f.name, temp_files_map[f.name])
 
 # CỘT PHẢI: KIỂM DUYỆT THÔNG TIN & ĐỐI CHIẾU
 with col_right:
     st.markdown("##### ✍️ KIỂM DUYỆT & ĐỐI CHIẾU THÔNG TIN")
     
-    if not uploaded_file:
+    if not uploaded_files:
         st.info("Chưa có chứng từ nào được nạp.")
     elif not selected_templates:
         st.info("Vui lòng chọn ít nhất 1 biểu mẫu ở ô trên để hệ thống nạp các trường cần điền.")
@@ -141,25 +159,58 @@ with col_right:
             template_tags_map[tpl] = clean_tags
             
         # Nút kích hoạt trích xuất
-        if not API_KEY:
-            st.error("Chưa tìm thấy GEMINI_API_KEY trong file .env. Vui lòng kiểm tra lại cấu hình.")
+        if not API_KEYS:
+            st.error("Chưa tìm thấy GEMINI_API_KEYS trong file .env. Vui lòng kiểm tra lại cấu hình.")
         else:
-            if st.button("🔍 Trích xuất thông tin chứng từ", type="primary", use_container_width=True):
-                with st.spinner("Đang đọc và đối chiếu dữ liệu chứng từ..."):
-                    data = AIExtractor(API_KEY).extract_invoice_data(temp_input, expected_tags=all_dynamic_tags) 
-                    if "error" not in data: 
-                        st.session_state['data'] = data
-                    else: 
-                        st.error(data['error'])
+            btn_label = "🔍 Trích xuất thông tin chứng từ" if len(uploaded_files) == 1 else f"🔍 Trích xuất & Gộp {len(uploaded_files)} hóa đơn"
+            if st.button(btn_label, type="primary", use_container_width=True):
+                invoice_results = []
+                progress_bar = st.progress(0.0)
+                status_box = st.empty()
+                total_files = len(uploaded_files)
+                extractor = AIExtractor(API_KEYS)
+
+                for idx, f in enumerate(uploaded_files):
+                    status_box.info(f"⏳ Đang bóc tách hóa đơn {idx + 1}/{total_files}: **{f.name}** (Điều phối máy chủ AI)...")
+                    progress_bar.progress(idx / total_files)
+                    temp_path = temp_files_map[f.name]
+                    extracted = extractor.extract_invoice_data(temp_path, expected_tags=all_dynamic_tags)
+                    invoice_results.append({
+                        "filename": f.name,
+                        "data": extracted
+                    })
+
+                progress_bar.progress(1.0)
+                status_box.empty()
+                progress_bar.empty()
+
+                if len(invoice_results) == 1:
+                    merged_res = invoice_results[0]["data"]
+                else:
+                    merged_res = InvoiceMerger.merge_invoices(invoice_results)
+
+                if "error" not in merged_res:
+                    st.session_state['data'] = merged_res
+                    success_msg = "Trích xuất thông tin chứng từ thành công!" if len(uploaded_files) == 1 else f"Đã trích xuất & gộp thành công {len(uploaded_files)} hóa đơn!"
+                    st.toast(success_msg, icon="✅")
+                else:
+                    st.error(merged_res['error'])
 
         # Khi đã có dữ liệu trích xuất
         if 'data' in st.session_state:
             data = st.session_state['data']
             
-            # Cảnh báo sai lệch số liệu (nếu có)
+            # Thông báo gộp nhiều hóa đơn nếu có
+            meta = data.get("_multi_invoice_meta")
+            if meta and meta.get("total_invoices", 1) > 1:
+                ncc_name = data.get("thong_tin_nha_cung_cap", {}).get("ten_cong_ty") or "Nhà cung cấp"
+                so_hd_gop = data.get("thong_tin_chung", {}).get("so_chung_tu") or "Đã tổng hợp"
+                st.success(f"📑 **ĐÃ GỘP THÀNH CÔNG {meta['total_invoices']} HÓA ĐƠN!**\n\n- **Nhà cung cấp:** {ncc_name}\n- **Số hóa đơn:** {so_hd_gop}\n- **Tổng mặt hàng:** {len(data.get('danh_sach_hang_hoa', []))} mục")
+
+            # Cảnh báo sai lệch số liệu hoặc khác NCC (nếu có)
             canh_bao = data.get("danh_sach_canh_bao", [])
             if canh_bao and len(canh_bao) > 0 and str(canh_bao[0]).strip() != "":
-                st.warning("⚠️ **Lưu ý số liệu từ chứng từ:**")
+                st.warning("⚠️ **Lưu ý số liệu & Nhà cung cấp:**")
                 for loi in canh_bao: 
                     st.caption(f"- {loi}")
 

@@ -1,0 +1,189 @@
+import re
+
+class InvoiceMerger:
+    @staticmethod
+    def _normalize_str(s: str) -> str:
+        if not s:
+            return ""
+        return re.sub(r'[\s\.\,\-_]+', '', str(s)).lower().strip()
+
+    @classmethod
+    def merge_invoices(cls, invoice_results: list[dict]) -> dict:
+        """
+        Hợp nhất danh sách kết quả bóc tách từ nhiều hóa đơn của cùng một Nhà Cung Cấp.
+        :param invoice_results: Danh sách các dict dạng:
+               [{"filename": "hd1.pdf", "data": {...}}, {"filename": "hd2.pdf", "data": {...}}]
+        :return: Dict dữ liệu hợp nhất theo đúng schema chuẩn của AIExtractor
+        """
+        if not invoice_results:
+            return {}
+
+        valid_invoices = [inv for inv in invoice_results if inv.get("data") and "error" not in inv.get("data", {})]
+        if not valid_invoices:
+            # Nếu tất cả đều lỗi, trả về lỗi của hóa đơn đầu tiên
+            return invoice_results[0].get("data", {"error": "Không có dữ liệu hóa đơn hợp lệ để gộp."})
+
+        # 1. Thu thập và kiểm tra tính đồng nhất của Nhà Cung Cấp
+        canh_bao_tong = []
+        ncc_names = []
+        ncc_msts = []
+        base_ncc = {
+            "ten_cong_ty": "",
+            "dia_chi": "",
+            "dien_thoai": "",
+            "ma_so_thue": "",
+            "email": ""
+        }
+        base_khach_hang = {
+            "ten_khach_hang": "",
+            "dia_chi": "",
+            "ma_so_thue": ""
+        }
+
+        for idx, item in enumerate(valid_invoices):
+            inv_data = item.get("data", {})
+            fname = item.get("filename", f"Hóa đơn {idx + 1}")
+            
+            # Kiểm tra NCC
+            ncc_info = inv_data.get("thong_tin_nha_cung_cap", {})
+            ten = str(ncc_info.get("ten_cong_ty") or "").strip()
+            mst = str(ncc_info.get("ma_so_thue") or "").strip()
+
+            if ten:
+                ncc_names.append((fname, ten))
+            if mst:
+                ncc_msts.append((fname, mst))
+
+            # Bổ sung các trường còn khuyết cho NCC từ các hóa đơn khác nhau
+            for k in base_ncc:
+                val = str(ncc_info.get(k) or "").strip()
+                if val and not base_ncc[k]:
+                    base_ncc[k] = val
+
+            # Bổ sung thông tin khách hàng
+            kh_info = inv_data.get("thong_tin_khach_hang", {})
+            for k in base_khach_hang:
+                val = str(kh_info.get(k) or "").strip()
+                if val and not base_khach_hang[k]:
+                    base_khach_hang[k] = val
+
+            # Gom cảnh báo từng hóa đơn
+            for cb in inv_data.get("danh_sach_canh_bao", []):
+                if cb and str(cb).strip():
+                    canh_bao_tong.append(f"[{fname}] {cb}")
+
+        # Kiểm tra cảnh báo nếu có dấu hiệu khác Nhà cung cấp
+        if len(ncc_msts) > 1:
+            first_mst_norm = cls._normalize_str(ncc_msts[0][1])
+            mismatches = [f"{fname} (MST: {mst})" for fname, mst in ncc_msts if cls._normalize_str(mst) != first_mst_norm]
+            if mismatches:
+                canh_bao_tong.insert(0, f"⚠️ Lưu ý: Phát hiện các hóa đơn có Mã số thuế khác nhau: {', '.join(mismatches)}. Vui lòng kiểm tra lại xem có đúng cùng một Nhà cung cấp không.")
+        elif len(ncc_names) > 1:
+            first_name_norm = cls._normalize_str(ncc_names[0][1])
+            mismatches = [f"{fname} ({ten})" for fname, ten in ncc_names if cls._normalize_str(ten) != first_name_norm]
+            if mismatches:
+                canh_bao_tong.insert(0, f"⚠️ Lưu ý: Tên nhà cung cấp giữa các hóa đơn có sự khác biệt: {', '.join(mismatches)}.")
+
+        # 2. Hợp nhất số chứng từ và ngày tháng
+        so_chung_tu_list = []
+        ngay_thang_list = []
+
+        for idx, item in enumerate(valid_invoices):
+            inv_data = item.get("data", {})
+            tt_chung = inv_data.get("thong_tin_chung", {})
+            sct = str(tt_chung.get("so_chung_tu") or "").strip()
+            ntn = str(tt_chung.get("ngay_thang_nam") or "").strip()
+            
+            if sct and sct not in so_chung_tu_list:
+                so_chung_tu_list.append(sct)
+            if ntn and ntn not in ngay_thang_list:
+                ngay_thang_list.append(ntn)
+
+        merged_so_chung_tu = ", ".join(so_chung_tu_list) if so_chung_tu_list else ""
+        merged_ngay_thang = ", ".join(ngay_thang_list) if ngay_thang_list else ""
+
+        # 3. Hợp nhất danh sách hàng hóa
+        merged_hang_hoa = []
+        current_stt = 1
+
+        for idx, item in enumerate(valid_invoices):
+            inv_data = item.get("data", {})
+            fname = item.get("filename", f"HĐ {idx + 1}")
+            sct = str(inv_data.get("thong_tin_chung", {}).get("so_chung_tu") or "").strip()
+            inv_ref = f"HĐ {sct}" if sct else fname
+
+            ds_hh = inv_data.get("danh_sach_hang_hoa", [])
+            for hh in ds_hh:
+                ten_hh = str(hh.get("ten_hang_hoa") or "").strip()
+                if not ten_hh:
+                    continue
+
+                sl = float(hh.get("so_luong") or 0)
+                don_gia = float(hh.get("don_gia") or 0)
+                thanh_tien = float(hh.get("thanh_tien") or (sl * don_gia))
+                ghi_chu_goc = str(hh.get("ghi_chu") or "").strip()
+                
+                # Ghi chú nguồn gốc từ hóa đơn nào nếu có nhiều hóa đơn gộp
+                if len(valid_invoices) > 1:
+                    note_tag = f"[{inv_ref}]"
+                    ghi_chu_final = f"{note_tag} {ghi_chu_goc}".strip() if ghi_chu_goc else note_tag
+                else:
+                    ghi_chu_final = ghi_chu_goc
+
+                merged_hang_hoa.append({
+                    "stt": current_stt,
+                    "ten_hang_hoa": ten_hh,
+                    "don_vi_tinh": str(hh.get("don_vi_tinh") or ""),
+                    "so_luong": sl,
+                    "don_gia": don_gia,
+                    "thanh_tien": thanh_tien,
+                    "muc_dich_su_dung": str(hh.get("muc_dich_su_dung") or ""),
+                    "ghi_chu": ghi_chu_final
+                })
+                current_stt += 1
+
+        # 4. Hợp nhất thông tin VAT
+        vat_modes = [bool(inv.get("data", {}).get("thong_tin_vat", {}).get("da_bao_gom_vat", False)) for inv in valid_invoices]
+        vat_rates = [float(inv.get("data", {}).get("thong_tin_vat", {}).get("thue_suat", 8) or 8) for inv in valid_invoices]
+        
+        # Chọn chế độ VAT phổ biến nhất
+        da_bao_gom_vat_final = max(set(vat_modes), key=vat_modes.count) if vat_modes else False
+        thue_suat_final = max(set(vat_rates), key=vat_rates.count) if vat_rates else 8.0
+
+        if len(set(vat_rates)) > 1:
+            canh_bao_tong.append(f"⚠️ Lưu ý: Các hóa đơn có mức thuế suất GTGT khác nhau ({list(set(vat_rates))}%). Mức thuế mặc định được chọn là {thue_suat_final}%.")
+
+        # 5. Hợp nhất các thẻ thông tin động (thong_tin_dong)
+        merged_thong_tin_dong = {}
+        for item in valid_invoices:
+            tt_dong = item.get("data", {}).get("thong_tin_dong", {})
+            if isinstance(tt_dong, dict):
+                for k, v in tt_dong.items():
+                    if v and not merged_thong_tin_dong.get(k):
+                        merged_thong_tin_dong[k] = v
+
+        # Điền các trường tự động gợi ý cho đề nghị thanh toán / hợp đồng
+        if merged_so_chung_tu:
+            merged_thong_tin_dong.setdefault("ly_do_thanh_toan", f"Thanh toán theo các hóa đơn số: {merged_so_chung_tu}")
+            merged_thong_tin_dong.setdefault("ly_do_de_nghi", f"Thanh toán theo các hóa đơn số: {merged_so_chung_tu}")
+
+        return {
+            "thong_tin_nha_cung_cap": base_ncc,
+            "thong_tin_chung": {
+                "loai_chung_tu": "Bảng kê hóa đơn tổng hợp" if len(valid_invoices) > 1 else valid_invoices[0].get("data", {}).get("thong_tin_chung", {}).get("loai_chung_tu", "Hóa đơn"),
+                "so_chung_tu": merged_so_chung_tu,
+                "ngay_thang_nam": merged_ngay_thang
+            },
+            "thong_tin_khach_hang": base_khach_hang,
+            "danh_sach_hang_hoa": merged_hang_hoa,
+            "thong_tin_vat": {
+                "da_bao_gom_vat": da_bao_gom_vat_final,
+                "thue_suat": thue_suat_final
+            },
+            "thong_tin_dong": merged_thong_tin_dong,
+            "danh_sach_canh_bao": canh_bao_tong,
+            "_multi_invoice_meta": {
+                "total_invoices": len(valid_invoices),
+                "invoice_files": [item.get("filename") for item in valid_invoices]
+            }
+        }
