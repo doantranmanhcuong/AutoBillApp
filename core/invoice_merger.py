@@ -19,12 +19,23 @@ class InvoiceMerger:
             return {}
 
         valid_invoices = [inv for inv in invoice_results if inv.get("data") and "error" not in inv.get("data", {})]
+        failed_invoices = [inv for inv in invoice_results if not inv.get("data") or "error" in inv.get("data", {})]
+
         if not valid_invoices:
             # Nếu tất cả đều lỗi, trả về lỗi của hóa đơn đầu tiên
-            return invoice_results[0].get("data", {"error": "Không có dữ liệu hóa đơn hợp lệ để gộp."})
+            first_err = invoice_results[0].get("data", {}).get("error", "Không có dữ liệu hóa đơn hợp lệ để gộp.")
+            return {"error": first_err}
 
         # 1. Thu thập và kiểm tra tính đồng nhất của Nhà Cung Cấp
         canh_bao_tong = []
+
+        # Cảnh báo nếu có hóa đơn bị lỗi trong quá trình bóc tách
+        if failed_invoices:
+            failed_details = [f"'{inv.get('filename')}'" for inv in failed_invoices]
+            canh_bao_tong.append(
+                f"🚨 CẢNH BÁO QUAN TRỌNG: Bạn đã tải lên {len(invoice_results)} hóa đơn nhưng chỉ bóc tách thành công {len(valid_invoices)} hóa đơn. "
+                f"Có {len(failed_invoices)} hóa đơn chưa được gộp ({', '.join(failed_details)}). Vui lòng kiểm tra lại các file này!"
+            )
         ncc_names = []
         ncc_msts = []
         base_ncc = {
@@ -183,7 +194,10 @@ class InvoiceMerger:
             "thong_tin_dong": merged_thong_tin_dong,
             "danh_sach_canh_bao": canh_bao_tong,
             "_multi_invoice_meta": {
+                "total_uploaded": len(invoice_results),
                 "total_invoices": len(valid_invoices),
+                "failed_count": len(failed_invoices),
+                "failed_files": [inv.get("filename") for inv in failed_invoices],
                 "invoice_files": [item.get("filename") for item in valid_invoices]
             }
         }

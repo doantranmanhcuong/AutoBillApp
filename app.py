@@ -4,6 +4,7 @@ import pandas as pd
 import zipfile
 import io
 import tempfile
+import time
 from PIL import Image
 from docx import Document
 try:
@@ -29,7 +30,7 @@ st.set_page_config(
 # Nạp giao diện văn phòng chuẩn mực (đơn giản, trong sáng)
 apply_office_theme()
 
-def render_file_preview(file_name: str, file_path: str):
+def render_file_preview(file_name: str, file_path: str, unique_idx: int = 0):
     """Hiển thị nội dung xem trước tài liệu gốc (PDF, Ảnh, Excel, Word)"""
     file_ext = file_name.split('.')[-1].lower()
     with st.container(border=True):
@@ -47,7 +48,7 @@ def render_file_preview(file_name: str, file_path: str):
             except Exception as e:
                 st.warning(f"Không thể mở trực tiếp bản xem trước PDF: {str(e)}")
                 with open(file_path, "rb") as f:
-                    st.download_button("📥 Tải về file PDF gốc để xem", f, file_name=file_name, key=f"dl_{file_name}")
+                    st.download_button("📥 Tải về file PDF gốc để xem", f, file_name=file_name, key=f"dl_{unique_idx}_{file_name}")
         elif file_ext == 'xlsx':
             for sheet, df in pd.read_excel(file_path, sheet_name=None).items(): 
                 st.caption(f"Trang tính: {sheet}")
@@ -55,7 +56,7 @@ def render_file_preview(file_name: str, file_path: str):
                 st.dataframe(clean_df, height=500, use_container_width=True)
         elif file_ext == 'docx':
             text = "\n".join([p.text for p in Document(file_path).paragraphs])
-            st.text_area("Nội dung văn bản Word:", text, height=500, key=f"txt_{file_name}")
+            st.text_area("Nội dung văn bản Word:", text, height=500, key=f"txt_{unique_idx}_{file_name}")
 
 # Tiêu đề ứng dụng
 st.markdown("### 📑 HỆ THỐNG LẬP HỒ SƠ & CHỨNG TỪ KẾ TOÁN")
@@ -85,30 +86,31 @@ with col_top2:
 
 st.markdown("---")
 
-# Quản lý danh sách file tạm an toàn cho nhiều file
-current_filenames = [f.name for f in uploaded_files] if uploaded_files else []
-if st.session_state.get('uploaded_filenames') != current_filenames:
-    old_temp_map = st.session_state.get('temp_files_map', {})
-    for p in old_temp_map.values():
-        if os.path.exists(p):
+# Quản lý danh sách file tạm an toàn theo list (tránh trùng tên và bảo toàn thứ tự)
+current_signatures = [f"{f.name}_{f.size}" for f in uploaded_files] if uploaded_files else []
+if st.session_state.get('uploaded_signatures') != current_signatures:
+    old_temp_list = st.session_state.get('temp_files_list', [])
+    for item in old_temp_list:
+        p = item.get("path")
+        if p and os.path.exists(p):
             try:
                 os.remove(p)
             except Exception:
                 pass
     
-    new_temp_map = {}
+    new_temp_list = []
     for f in (uploaded_files or []):
         f_ext = f.name.split('.')[-1].lower()
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{f_ext}") as tmp_f:
             tmp_f.write(f.getbuffer())
-            new_temp_map[f.name] = tmp_f.name
+            new_temp_list.append({"name": f.name, "path": tmp_f.name})
             
-    st.session_state['temp_files_map'] = new_temp_map
-    st.session_state['uploaded_filenames'] = current_filenames
+    st.session_state['temp_files_list'] = new_temp_list
+    st.session_state['uploaded_signatures'] = current_signatures
     if 'data' in st.session_state:
         del st.session_state['data']
 
-temp_files_map = st.session_state.get('temp_files_map', {})
+temp_files_list = st.session_state.get('temp_files_list', [])
 
 # BƯỚC 2 & 3: GIAO DIỆN 2 CỘT (CHỨNG TỪ GỐC & KIỂM DUYỆT)
 col_left, col_right = st.columns([4.8, 5.2], gap="large")
@@ -116,17 +118,17 @@ col_left, col_right = st.columns([4.8, 5.2], gap="large")
 # CỘT TRÁI: HIỂN THỊ CHỨNG TỪ GỐC
 with col_left:
     st.markdown("##### 🔍 TÀI LIỆU GỐC")
-    if not uploaded_files:
+    if not uploaded_files or not temp_files_list:
         st.info("Vui lòng tải lên tài liệu ở Bước 1 để bắt đầu xem trước.")
-    elif len(uploaded_files) == 1:
-        f = uploaded_files[0]
-        render_file_preview(f.name, temp_files_map[f.name])
+    elif len(temp_files_list) == 1:
+        item = temp_files_list[0]
+        render_file_preview(item["name"], item["path"], unique_idx=0)
     else:
-        st.caption(f"📑 Đã nạp {len(uploaded_files)} hóa đơn (Chuyển tab để xem từng file):")
-        file_tabs = st.tabs([f"📄 {f.name}" for f in uploaded_files])
-        for idx, f in enumerate(uploaded_files):
+        st.caption(f"📑 Đã nạp {len(temp_files_list)} hóa đơn (Chuyển tab để xem từng file):")
+        file_tabs = st.tabs([f"📄 {item['name']}" for item in temp_files_list])
+        for idx, item in enumerate(temp_files_list):
             with file_tabs[idx]:
-                render_file_preview(f.name, temp_files_map[f.name])
+                render_file_preview(item["name"], item["path"], unique_idx=idx)
 
 # CỘT PHẢI: KIỂM DUYỆT THÔNG TIN & ĐỐI CHIẾU
 with col_right:
@@ -160,23 +162,31 @@ with col_right:
             
         # Nút kích hoạt trích xuất
         if not API_KEYS:
-            st.error("Chưa tìm thấy GEMINI_API_KEYS trong file .env. Vui lòng kiểm tra lại cấu hình.")
+            st.error("Chưa tìm thấy GEMINI_API_KEYS trong file .env hoặc Secrets. Vui lòng kiểm tra lại cấu hình.")
         else:
-            btn_label = "🔍 Trích xuất thông tin chứng từ" if len(uploaded_files) == 1 else f"🔍 Trích xuất & Gộp {len(uploaded_files)} hóa đơn"
+            btn_label = "🔍 Trích xuất thông tin chứng từ" if len(temp_files_list) == 1 else f"🔍 Trích xuất & Gộp {len(temp_files_list)} hóa đơn"
             if st.button(btn_label, type="primary", use_container_width=True):
                 invoice_results = []
                 progress_bar = st.progress(0.0)
                 status_box = st.empty()
-                total_files = len(uploaded_files)
+                total_files = len(temp_files_list)
                 extractor = AIExtractor(API_KEYS)
 
-                for idx, f in enumerate(uploaded_files):
-                    status_box.info(f"⏳ Đang bóc tách hóa đơn {idx + 1}/{total_files}: **{f.name}** (Điều phối máy chủ AI)...")
+                for idx, item in enumerate(temp_files_list):
+                    fname = item["name"]
+                    fpath = item["path"]
+
+                    # Giãn cách 2.0 giây giữa các file để tránh vượt giới hạn tốc độ RPM của AI
+                    if idx > 0:
+                        status_box.caption(f"⏳ Tạm dừng 2s để làm nguội máy chủ AI trước khi bóc tách file {idx + 1}/{total_files}...")
+                        time.sleep(2.0)
+
+                    status_box.info(f"⏳ Đang bóc tách hóa đơn {idx + 1}/{total_files}: **{fname}**...")
                     progress_bar.progress(idx / total_files)
-                    temp_path = temp_files_map[f.name]
-                    extracted = extractor.extract_invoice_data(temp_path, expected_tags=all_dynamic_tags)
+                    
+                    extracted = extractor.extract_invoice_data(fpath, expected_tags=all_dynamic_tags)
                     invoice_results.append({
-                        "filename": f.name,
+                        "filename": fname,
                         "data": extracted
                     })
 
@@ -191,8 +201,13 @@ with col_right:
 
                 if "error" not in merged_res:
                     st.session_state['data'] = merged_res
-                    success_msg = "Trích xuất thông tin chứng từ thành công!" if len(uploaded_files) == 1 else f"Đã trích xuất & gộp thành công {len(uploaded_files)} hóa đơn!"
-                    st.toast(success_msg, icon="✅")
+                    meta = merged_res.get("_multi_invoice_meta", {})
+                    failed_cnt = meta.get("failed_count", 0)
+                    if failed_cnt > 0:
+                        st.warning(f"⚠️ Đã gộp {meta.get('total_invoices')}/{meta.get('total_uploaded')} hóa đơn. Có {failed_cnt} hóa đơn bị lỗi: {', '.join(meta.get('failed_files', []))}")
+                    else:
+                        success_msg = "Trích xuất thông tin chứng từ thành công!" if len(temp_files_list) == 1 else f"Đã trích xuất & gộp trọn vẹn cả {len(temp_files_list)} hóa đơn thành công!"
+                        st.toast(success_msg, icon="✅")
                 else:
                     st.error(merged_res['error'])
 
@@ -202,10 +217,14 @@ with col_right:
             
             # Thông báo gộp nhiều hóa đơn nếu có
             meta = data.get("_multi_invoice_meta")
-            if meta and meta.get("total_invoices", 1) > 1:
+            if meta and meta.get("total_uploaded", 1) > 1:
                 ncc_name = data.get("thong_tin_nha_cung_cap", {}).get("ten_cong_ty") or "Nhà cung cấp"
                 so_hd_gop = data.get("thong_tin_chung", {}).get("so_chung_tu") or "Đã tổng hợp"
-                st.success(f"📑 **ĐÃ GỘP THÀNH CÔNG {meta['total_invoices']} HÓA ĐƠN!**\n\n- **Nhà cung cấp:** {ncc_name}\n- **Số hóa đơn:** {so_hd_gop}\n- **Tổng mặt hàng:** {len(data.get('danh_sach_hang_hoa', []))} mục")
+                failed_cnt = meta.get("failed_count", 0)
+                if failed_cnt > 0:
+                    st.warning(f"📑 **ĐÃ GỘP {meta['total_invoices']}/{meta['total_uploaded']} HÓA ĐƠN (CÓ {failed_cnt} HÓA ĐƠN BỊ LỖI):**\n\n- **Nhà cung cấp:** {ncc_name}\n- **Số hóa đơn:** {so_hd_gop}\n- **Tổng mặt hàng:** {len(data.get('danh_sach_hang_hoa', []))} mục\n- **File bị lỗi:** {', '.join(meta.get('failed_files', []))}")
+                else:
+                    st.success(f"📑 **ĐÃ GỘP THÀNH CÔNG TRỌN VẸN CẢ {meta['total_invoices']} HÓA ĐƠN!**\n\n- **Nhà cung cấp:** {ncc_name}\n- **Số hóa đơn:** {so_hd_gop}\n- **Tổng mặt hàng:** {len(data.get('danh_sach_hang_hoa', []))} mục")
 
             # Cảnh báo sai lệch số liệu hoặc khác NCC (nếu có)
             canh_bao = data.get("danh_sach_canh_bao", [])

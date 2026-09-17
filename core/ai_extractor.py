@@ -4,13 +4,14 @@ import json
 import pandas as pd
 import docx
 import os
+import time
 
 class AIExtractor:
     _current_key_index = 0  # Biến tĩnh lưu vị trí key hiện tại để xoay vòng liên tục
 
     def __init__(self, api_keys):
         """
-        Khởi tạo AIExtractor với cụm 3 API Keys xoay vòng (Round-Robin)
+        Khởi tạo AIExtractor với cụm API Keys xoay vòng (Round-Robin) & Chống nghẽn tải
         :param api_keys: có thể là str (1 key hoặc chuỗi key cách nhau bởi dấu phẩy) hoặc list[str]
         """
         if isinstance(api_keys, str):
@@ -20,18 +21,20 @@ class AIExtractor:
         else:
             self.api_keys = []
 
-        # Cố định model gemini-3.5-flash theo yêu cầu
-        self.model_name = 'gemini-3.5-flash'
+        # Model ưu tiên hàng đầu theo yêu cầu
+        self.primary_model = 'gemini-3.5-flash'
+        # Model phao cứu sinh nếu toàn bộ 3 key chạm giới hạn 429 trên model chính
+        self.fallback_models = ['gemini-2.5-flash', 'gemini-1.5-flash']
 
     def extract_invoice_data(self, file_path: str, expected_tags=None):
         if not self.api_keys:
-            return {"error": "Chưa tìm thấy danh sách Gemini API Keys trong file .env."}
+            return {"error": "Chưa tìm thấy danh sách Gemini API Keys trong file .env hoặc cấu hình Secrets."}
 
         file_extension = file_path.split('.')[-1].lower()
         if file_extension not in ['png', 'jpg', 'jpeg', 'pdf', 'docx', 'xlsx']:
             return {"error": f"Định dạng file .{file_extension} chưa được hỗ trợ."}
 
-        # Chuẩn bị trước nội dung cho ảnh / word / excel để không phải parse nhiều lần khi đổi key
+        # Chuẩn bị trước nội dung cho ảnh / word / excel
         image_content = None
         text_content_payload = None
 
@@ -85,80 +88,82 @@ class AIExtractor:
         """
 
         num_keys = len(self.api_keys)
-        start_index = AIExtractor._current_key_index
+        models_to_try = [self.primary_model] + self.fallback_models
         last_error_msg = ""
         hit_quota_error = False
 
-        # Thử lần lượt qua toàn bộ các key trong cụm (Round-Robin)
-        for offset in range(num_keys):
-            key_idx = (start_index + offset) % num_keys
-            api_key = self.api_keys[key_idx]
-            client = None
-            uploaded_pdf = None
+        for model_candidate in models_to_try:
+            start_index = AIExtractor._current_key_index
+            
+            for offset in range(num_keys):
+                key_idx = (start_index + offset) % num_keys
+                api_key = self.api_keys[key_idx]
+                client = None
+                uploaded_pdf = None
 
-            try:
-                client = genai.Client(api_key=api_key)
+                try:
+                    client = genai.Client(api_key=api_key)
 
-                # Chuẩn bị media_content cho client tương ứng
-                if file_extension in ['png', 'jpg', 'jpeg']:
-                    media_content = image_content
-                elif file_extension == 'pdf':
-                    uploaded_pdf = client.files.upload(file=file_path)
-                    media_content = uploaded_pdf
-                else:
-                    media_content = text_content_payload
+                    # Chuẩn bị media_content
+                    if file_extension in ['png', 'jpg', 'jpeg']:
+                        media_content = image_content
+                    elif file_extension == 'pdf':
+                        uploaded_pdf = client.files.upload(file=file_path)
+                        media_content = uploaded_pdf
+                    else:
+                        media_content = text_content_payload
 
-                # Gọi AI với model gemini-3.5-flash
-                response = client.models.generate_content(
-                    model=self.model_name,
-                    contents=[media_content, prompt],
-                    config={"response_mime_type": "application/json"}
-                )
+                    # Thực hiện gọi AI
+                    response = client.models.generate_content(
+                        model=model_candidate,
+                        contents=[media_content, prompt],
+                        config={"response_mime_type": "application/json"}
+                    )
 
-                if not response or not response.text:
+                    if not response or not response.text:
+                        continue
+
+                    text_result = response.text.strip()
+                    if text_result.startswith("```json"): 
+                        text_result = text_result[7:-3].strip()
+                    elif text_result.startswith("```"): 
+                        text_result = text_result[3:-3].strip()
+
+                    parsed_data = json.loads(text_result)
+
+                    # Thành công: Cập nhật vị trí xoay vòng cho lần gọi kế tiếp
+                    AIExtractor._current_key_index = (key_idx + 1) % num_keys
+                    return parsed_data
+
+                except json.JSONDecodeError:
+                    last_error_msg = "AI trả về định dạng dữ liệu không hợp lệ."
                     continue
+                except Exception as e:
+                    err_str = str(e)
+                    err_lower = err_str.lower()
+                    last_error_msg = err_str
 
-                text_result = response.text.strip()
-                if text_result.startswith("```json"): 
-                    text_result = text_result[7:-3].strip()
-                elif text_result.startswith("```"): 
-                    text_result = text_result[3:-3].strip()
+                    # Nhận diện lỗi 429 / Quota / Resource Exhausted
+                    if "429" in err_str or "resource_exhausted" in err_lower or "quota" in err_lower:
+                        hit_quota_error = True
+                        print(f"[AIExtractor] Key #{key_idx + 1}/{num_keys} đạt giới hạn quota ({model_candidate}). Đang chuyển key khác...")
+                        time.sleep(1.0)  # Giãn cách 1s chống rate limit RPM
+                        continue
+                    else:
+                        continue
+                finally:
+                    # Luôn xóa file PDF tạm trên máy chủ AI
+                    if uploaded_pdf and client:
+                        try:
+                            client.files.delete(name=uploaded_pdf.name)
+                        except Exception:
+                            pass
 
-                parsed_data = json.loads(text_result)
-
-                # Thành công: Cập nhật vị trí xoay vòng cho lần gọi kế tiếp
-                AIExtractor._current_key_index = (key_idx + 1) % num_keys
-                return parsed_data
-
-            except json.JSONDecodeError:
-                last_error_msg = "AI trả về định dạng dữ liệu không hợp lệ. Đang chuyển máy chủ khác thử lại..."
-                continue
-            except Exception as e:
-                err_str = str(e)
-                err_lower = err_str.lower()
-                last_error_msg = err_str
-
-                # Nhận diện lỗi 429 / Quota / Resource Exhausted
-                if "429" in err_str or "resource_exhausted" in err_lower or "quota" in err_lower:
-                    hit_quota_error = True
-                    print(f"[AIExtractor] Key #{key_idx + 1}/{num_keys} đạt giới hạn quota ({self.model_name}). Đang chuyển sang key tiếp theo...")
-                    continue
-                else:
-                    # Lỗi mạng tạm thời hoặc kết nối, thử key kế tiếp
-                    continue
-            finally:
-                # Luôn xóa file PDF tạm trên server Google sau khi xử lý
-                if uploaded_pdf and client:
-                    try:
-                        client.files.delete(name=uploaded_pdf.name)
-                    except Exception:
-                        pass
-
-        # Khi toàn bộ 3 key đều hết quota / quá tải
+        # Khi toàn bộ các key và các model đều hết quota
         if hit_quota_error:
             return {
-                "error": "⚠️ Toàn bộ 3 máy chủ AI hiện đang đạt giới hạn yêu cầu tạm thời. "
-                         "Vui lòng đợi trong ít phút (khoảng 1 - 2 phút) để 3 máy chủ tự động phục hồi và hoạt động lại bình thường."
+                "error": "⚠️ Cụm máy chủ AI tạm thời đạt giới hạn yêu cầu (429 Quota Exceeded). "
+                         "Vui lòng đợi 30 giây - 1 phút rồi thử lại."
             }
         
         return {"error": f"Không thể trích xuất tài liệu lúc này. Chi tiết: {last_error_msg}"}
