@@ -43,20 +43,26 @@ class InvoiceMerger:
             "dia_chi": "",
             "dien_thoai": "",
             "ma_so_thue": "",
-            "email": ""
+            "email": "",
+            "so_tai_khoan": "",
+            "ten_ngan_hang": "",
+            "nguoi_dai_dien": "",
+            "chuc_vu": ""
         }
         base_khach_hang = {
             "ten_khach_hang": "",
             "dia_chi": "",
-            "ma_so_thue": ""
+            "ma_so_thue": "",
+            "so_tai_khoan": "",
+            "ten_ngan_hang": ""
         }
 
         for idx, item in enumerate(valid_invoices):
-            inv_data = item.get("data", {})
+            inv_data = item.get("data") or {}
             fname = item.get("filename", f"Hóa đơn {idx + 1}")
             
             # Kiểm tra NCC
-            ncc_info = inv_data.get("thong_tin_nha_cung_cap", {})
+            ncc_info = inv_data.get("thong_tin_nha_cung_cap") or {}
             ten = str(ncc_info.get("ten_cong_ty") or "").strip()
             mst = str(ncc_info.get("ma_so_thue") or "").strip()
 
@@ -72,12 +78,25 @@ class InvoiceMerger:
                     base_ncc[k] = val
 
             # Bổ sung thông tin khách hàng
-            kh_info = inv_data.get("thong_tin_khach_hang", {})
+            kh_info = inv_data.get("thong_tin_khach_hang") or {}
             for k in base_khach_hang:
                 val = str(kh_info.get(k) or "").strip()
                 if val and not base_khach_hang[k]:
                     base_khach_hang[k] = val
 
+        # BIỆN PHÁP CHỐNG RÒ RỈ THÔNG TIN BÊN MUA (GRAPHENE) SANG BÊN BÁN (NCC):
+        kh_mst = str(base_khach_hang.get("ma_so_thue") or "").strip()
+        kh_stk = str(base_khach_hang.get("so_tai_khoan") or "").strip()
+        if "graphene" in str(base_ncc.get("ten_cong_ty") or "").lower():
+            base_ncc["ten_cong_ty"] = ""
+        if str(base_ncc.get("ma_so_thue") or "").strip() in ("4101649609", kh_mst):
+            base_ncc["ma_so_thue"] = ""
+        if str(base_ncc.get("so_tai_khoan") or "").strip() in ("884249867", kh_stk):
+            base_ncc["so_tai_khoan"] = ""
+
+        for idx, item in enumerate(valid_invoices):
+            inv_data = item.get("data") or {}
+            fname = item.get("filename", f"Hóa đơn {idx + 1}")
             # Gom cảnh báo từng hóa đơn
             for cb in inv_data.get("danh_sach_canh_bao", []):
                 if cb and str(cb).strip():
@@ -100,8 +119,8 @@ class InvoiceMerger:
         ngay_thang_list = []
 
         for idx, item in enumerate(valid_invoices):
-            inv_data = item.get("data", {})
-            tt_chung = inv_data.get("thong_tin_chung", {})
+            inv_data = item.get("data") or {}
+            tt_chung = inv_data.get("thong_tin_chung") or {}
             sct = str(tt_chung.get("so_chung_tu") or "").strip()
             ntn = str(tt_chung.get("ngay_thang_nam") or "").strip()
             
@@ -120,12 +139,12 @@ class InvoiceMerger:
         from core.utils.helpers import safe_float
 
         for idx, item in enumerate(valid_invoices):
-            inv_data = item.get("data", {})
+            inv_data = item.get("data") or {}
             fname = item.get("filename", f"HĐ {idx + 1}")
-            sct = str(inv_data.get("thong_tin_chung", {}).get("so_chung_tu") or "").strip()
+            sct = str((inv_data.get("thong_tin_chung") or {}).get("so_chung_tu") or "").strip()
             inv_ref = f"HĐ {sct}" if sct else fname
 
-            ds_hh = inv_data.get("danh_sach_hang_hoa", [])
+            ds_hh = inv_data.get("danh_sach_hang_hoa") or []
             if not isinstance(ds_hh, list):
                 continue
 
@@ -152,14 +171,14 @@ class InvoiceMerger:
                 else:
                     ghi_chu_final = ghi_chu_goc
 
-                ten_ncc_inv = str(inv_data.get("thong_tin_nha_cung_cap", {}).get("ten_cong_ty") or base_ncc.get("ten_cong_ty") or "").strip()
+                ten_ncc_inv = str((inv_data.get("thong_tin_nha_cung_cap") or {}).get("ten_cong_ty") or base_ncc.get("ten_cong_ty") or "").strip()
                 muc_dich_inv = str(hh.get("muc_dich") or hh.get("muc_dich_su_dung") or "").strip()
                 ton_kho_inv = str(hh.get("ton_kho") or hh.get("ton_kh") or "").strip()
 
                 # Thuế suất từng mặt hàng
                 item_thue = hh.get("thue_suat")
                 if item_thue is None or item_thue == "":
-                    item_thue = inv_data.get("thong_tin_vat", {}).get("thue_suat", 8.0)
+                    item_thue = (inv_data.get("thong_tin_vat") or {}).get("thue_suat", 8.0)
                 item_thue_float = safe_float(item_thue, 8.0)
 
                 merged_hang_hoa.append({
@@ -180,8 +199,8 @@ class InvoiceMerger:
                 current_stt += 1
 
         # 4. Hợp nhất thông tin VAT
-        vat_modes = [bool(inv.get("data", {}).get("thong_tin_vat", {}).get("da_bao_gom_vat", False)) for inv in valid_invoices]
-        vat_rates = [safe_float(inv.get("data", {}).get("thong_tin_vat", {}).get("thue_suat", 8.0), 8.0) for inv in valid_invoices]
+        vat_modes = [bool(((inv.get("data") or {}).get("thong_tin_vat") or {}).get("da_bao_gom_vat", False)) for inv in valid_invoices]
+        vat_rates = [safe_float(((inv.get("data") or {}).get("thong_tin_vat") or {}).get("thue_suat", 8.0), 8.0) for inv in valid_invoices]
         
         # Chọn chế độ VAT phổ biến nhất
         da_bao_gom_vat_final = max(set(vat_modes), key=vat_modes.count) if vat_modes else False
@@ -193,7 +212,7 @@ class InvoiceMerger:
         # 5. Hợp nhất các thẻ thông tin động (thong_tin_dong)
         merged_thong_tin_dong = {}
         for item in valid_invoices:
-            tt_dong = item.get("data", {}).get("thong_tin_dong", {})
+            tt_dong = (item.get("data") or {}).get("thong_tin_dong") or {}
             if isinstance(tt_dong, dict):
                 for k, v in tt_dong.items():
                     if v and not merged_thong_tin_dong.get(k):
@@ -204,10 +223,11 @@ class InvoiceMerger:
             merged_thong_tin_dong.setdefault("ly_do_thanh_toan", f"Thanh toán theo các hóa đơn số: {merged_so_chung_tu}")
             merged_thong_tin_dong.setdefault("ly_do_de_nghi", f"Thanh toán theo các hóa đơn số: {merged_so_chung_tu}")
 
+        first_chung = (valid_invoices[0].get("data") or {}).get("thong_tin_chung") or {}
         return {
             "thong_tin_nha_cung_cap": base_ncc,
             "thong_tin_chung": {
-                "loai_chung_tu": "Bảng kê hóa đơn tổng hợp" if len(valid_invoices) > 1 else valid_invoices[0].get("data", {}).get("thong_tin_chung", {}).get("loai_chung_tu", "Hóa đơn"),
+                "loai_chung_tu": "Bảng kê hóa đơn tổng hợp" if len(valid_invoices) > 1 else first_chung.get("loai_chung_tu", "Hóa đơn"),
                 "so_chung_tu": merged_so_chung_tu,
                 "ngay_thang_nam": merged_ngay_thang
             },

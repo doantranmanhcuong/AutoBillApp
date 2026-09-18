@@ -11,6 +11,14 @@ def apply_office_theme():
             max-width: 96%;
         }
         
+        /* Chống mờ tối (dimming) và chớp nháy màn hình khi đang nhập liệu vào form */
+        .stApp[data-test-script-state="running"] {
+            opacity: 0.98 !important;
+        }
+        div[data-testid="stAppViewContainer"] {
+            transition: none !important;
+        }
+
         /* Tiêu đề thanh lịch */
         h1, h2, h3 {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -68,6 +76,11 @@ def apply_office_theme():
 
 def display_financial_summary(tong_tien_hang, tien_thue, tong_thanh_toan, chu_so_tien, is_vat_included, thue_suat=None, tax_breakdown_str=None):
     """Hiển thị bảng tóm tắt số liệu thanh toán theo chuẩn kế toán (hỗ trợ cả đơn thuế và đa thuế 5%, 8%, 10%)"""
+    from core.utils.helpers import safe_float
+    tong_tien_hang = safe_float(tong_tien_hang, 0.0)
+    tien_thue = safe_float(tien_thue, 0.0)
+    tong_thanh_toan = safe_float(tong_thanh_toan, 0.0)
+
     if tax_breakdown_str:
         vat_status_badge = "(Đã gồm VAT)" if is_vat_included else "(Chưa gồm VAT)"
         tax_label = "Tổng tiền thuế GTGT:"
@@ -109,6 +122,8 @@ def display_financial_summary(tong_tien_hang, tien_thue, tong_thanh_toan, chu_so
 
 def display_zalo_message(company_name, total_amount):
     """Vẽ khối giao diện chứa tin nhắn Zalo mẫu để người dùng sao chép nhanh"""
+    from core.utils.helpers import safe_float
+    total_amount = safe_float(total_amount, 0.0)
     if company_name and total_amount > 0:
         amount_str = f"{total_amount:,.0f}".replace(",", ".")
         msg = f"Kính gửi Sếp hồ sơ thanh toán cho {company_name}.\nTổng số tiền: {amount_str} đ.\nEm đã lập đầy đủ biểu mẫu đính kèm, kính chuyển Sếp xem duyệt ạ!"

@@ -1,4 +1,6 @@
+import os
 import re
+from functools import lru_cache
 from docx import Document
 import openpyxl
 
@@ -32,9 +34,15 @@ def safe_float(val, default=0.0) -> float:
             else:
                 s = s.replace(',', '')
         elif '.' in s:
-            if s.count('.') > 1:
+            parts = s.split('.')
+            if len(parts) > 2:
                 # Nhiều dấu chấm (ví dụ: 1.500.000) -> dấu phân cách hàng nghìn
                 s = s.replace('.', '')
+            elif len(parts) == 2:
+                # Nếu phần sau dấu chấm đúng 3 chữ số và phần đầu từ 1-3 chữ số (ví dụ: 527.778) -> dấu phân cách hàng nghìn VN
+                if len(parts[1]) == 3 and len(parts[0]) <= 3:
+                    s = s.replace('.', '')
+                # Ngược lại (ví dụ: 8.5 hoặc 10.25) -> giữ nguyên là dấu chấm thập phân
 
         try:
             return float(s)
@@ -89,8 +97,9 @@ def doc_so_tien_vn(n):
     
     return s.strip().capitalize() + " đồng chẵn."
 
-def exhaustive_extract_tags(file_path):
-    """Quét toàn diện các thẻ {tag}, {{tag}}, {{{ tag }}} trong tệp docx và xlsx"""
+@lru_cache(maxsize=128)
+def _cached_extract_tags(file_path: str, mtime: float) -> frozenset:
+    """Quét và ghi nhớ thẻ tag trong tệp docx và xlsx theo thời gian sửa đổi file."""
     tags = set()
     pattern = re.compile(r'\{+\s*([a-zA-Z0-9_]+)\s*\}+')
     try:
@@ -103,6 +112,21 @@ def exhaustive_extract_tags(file_path):
                     for cell in row.cells:
                         for p in cell.paragraphs:
                             tags.update(pattern.findall(p.text))
+            for section in doc.sections:
+                for p in section.header.paragraphs:
+                    tags.update(pattern.findall(p.text))
+                for t in section.header.tables:
+                    for row in t.rows:
+                        for cell in row.cells:
+                            for p in cell.paragraphs:
+                                tags.update(pattern.findall(p.text))
+                for p in section.footer.paragraphs:
+                    tags.update(pattern.findall(p.text))
+                for t in section.footer.tables:
+                    for row in t.rows:
+                        for cell in row.cells:
+                            for p in cell.paragraphs:
+                                tags.update(pattern.findall(p.text))
         elif file_path.endswith('.xlsx'):
             wb = openpyxl.load_workbook(file_path, data_only=True)
             try:
@@ -118,4 +142,12 @@ def exhaustive_extract_tags(file_path):
     except Exception:
         pass
         
-    return {t.strip().lower() for t in tags}
+    return frozenset(t.strip().lower() for t in tags)
+
+def exhaustive_extract_tags(file_path):
+    """Quét toàn diện các thẻ {tag}, {{tag}}, {{{ tag }}} trong tệp docx và xlsx (tốc độ siêu tốc qua lru_cache)"""
+    try:
+        mtime = os.path.getmtime(file_path) if os.path.exists(file_path) else 0.0
+    except Exception:
+        mtime = 0.0
+    return set(_cached_extract_tags(file_path, mtime))
