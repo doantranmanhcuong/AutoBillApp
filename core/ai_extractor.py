@@ -21,10 +21,10 @@ class AIExtractor:
         else:
             self.api_keys = []
 
-        # Model ưu tiên hàng đầu theo yêu cầu
-        self.primary_model = 'gemini-3.5-flash'
-        # Model phao cứu sinh nếu toàn bộ 3 key chạm giới hạn 429 trên model chính
-        self.fallback_models = ['gemini-2.5-flash', 'gemini-1.5-flash']
+        # Mô hình chính thức theo khuyến nghị mới nhất của Google (tốc độ cao, chuẩn xác)
+        self.primary_model = 'gemini-3.6-flash'
+        # Các mô hình phao cứu sinh với hạn ngạch RPM rộng nếu model chính nghẽn tải
+        self.fallback_models = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest']
 
     def extract_invoice_data(self, file_path: str, expected_tags=None):
         if not self.api_keys:
@@ -71,7 +71,7 @@ class AIExtractor:
         2. CÓ GÌ GHI NẤY: Trích xuất y hệt thông tin trên giấy. 
            - Trạng thái các cột: Tuyệt đối KHÔNG TỰ ĐOÁN mục đích sử dụng ("muc_dich_su_dung"). Nếu không ghi cột mục đích, bắt buộc để chuỗi rỗng "".
            - Với trường "ghi_chu": Chỉ ghi nhận nếu tài liệu có cột Ghi chú, hoặc có các cột phụ (như "Xuất xứ", "Quy cách") thì gộp chung vào. Nếu không có, để trống "".
-        3. XÁC ĐỊNH THUẾ VAT: Đọc kỹ tài liệu xem giá trên bảng kê/báo giá là ĐÃ BAO GỒM VAT hay CHƯA BAO GỒM VAT. Ghi vào `thong_tin_vat.da_bao_gom_vat` (true/false) và trích xuất `thue_suat` (ví dụ 8, 10, 5, 0. Mặc định 8 nếu không ghi rõ).
+        3. XÁC ĐỊNH THUẾ VAT: Đọc kỹ tài liệu xem giá trên bảng kê/báo giá là ĐÃ BAO GỒM VAT hay CHƯA BAO GỒM VAT. Ghi vào `thong_tin_vat.da_bao_gom_vat` (true/false) và trích xuất `thue_suat` chung. ĐẶC BIỆT: Nếu các mặt hàng chịu thuế suất khác nhau (ví dụ có món 0%, 5%, 8%, 10%), hãy bóc tách chính xác số % thuế vào trường `thue_suat` của từng mặt hàng (chỉ ghi số nguyên, ví dụ: 5, 8, 10, 0). Nếu không ghi riêng từng món thì lấy mức thuế chung của hóa đơn gán cho các món.
         4. Tính toán lại số liệu, ghi lỗi vào "danh_sach_canh_bao". Nếu chuẩn 100%, để mảng rỗng [].
 
         CẤU TRÚC JSON BẮT BUỘC:
@@ -79,7 +79,7 @@ class AIExtractor:
           "thong_tin_nha_cung_cap": {{"ten_cong_ty": "", "dia_chi": "", "dien_thoai": "", "ma_so_thue": "", "email": ""}},
           "thong_tin_chung": {{"loai_chung_tu": "", "so_chung_tu": "", "ngay_thang_nam": ""}},
           "thong_tin_khach_hang": {{"ten_khach_hang": "", "dia_chi": "", "ma_so_thue": ""}},
-          "danh_sach_hang_hoa": [{{"stt": 1, "ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 0, "don_gia": 0, "thanh_tien": 0, "muc_dich_su_dung": "", "ghi_chu": ""}}],
+          "danh_sach_hang_hoa": [{{"stt": 1, "ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 0, "don_gia": 0, "thanh_tien": 0, "thue_suat": 8, "muc_dich_su_dung": "", "ghi_chu": ""}}],
           "tong_ket_tien": {{"tong_tien_truoc_thue": 0, "thue_suat_vat": "", "tien_thue_vat": 0, "tong_tien_thanh_toan": 0, "so_tien_viet_bang_chu": ""}},
           "thong_tin_vat": {{"da_bao_gom_vat": false, "thue_suat": 8}},
           "thong_tin_dong": {{}},

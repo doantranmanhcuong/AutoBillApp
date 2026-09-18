@@ -1,11 +1,10 @@
 import streamlit as st
 import os
+import time
 import pandas as pd
 import zipfile
 import io
 import tempfile
-import time
-from PIL import Image
 from docx import Document
 try:
     import pymupdf as fitz
@@ -13,7 +12,7 @@ except ImportError:
     import fitz
 
 from core.config import API_KEY, API_KEYS, TEMPLATE_DIR
-from core.utils.helpers import doc_so_tien_vn, exhaustive_extract_tags
+from core.utils.helpers import doc_so_tien_vn, exhaustive_extract_tags, safe_float
 from core.ai_extractor import AIExtractor
 from core.invoice_merger import InvoiceMerger
 from core.document_builder import DocumentBuilder
@@ -37,6 +36,7 @@ def render_file_preview(file_name: str, file_path: str, unique_idx: int = 0):
         if file_ext in ['png', 'jpg', 'jpeg']: 
             st.image(file_path, use_container_width=True)
         elif file_ext == 'pdf':
+            doc = None
             try:
                 doc = fitz.open(file_path)
                 st.caption(f"📄 Tài liệu PDF gồm {len(doc)} trang:")
@@ -49,6 +49,12 @@ def render_file_preview(file_name: str, file_path: str, unique_idx: int = 0):
                 st.warning(f"Không thể mở trực tiếp bản xem trước PDF: {str(e)}")
                 with open(file_path, "rb") as f:
                     st.download_button("📥 Tải về file PDF gốc để xem", f, file_name=file_name, key=f"dl_{unique_idx}_{file_name}")
+            finally:
+                if doc is not None:
+                    try:
+                        doc.close()
+                    except Exception:
+                        pass
         elif file_ext == 'xlsx':
             for sheet, df in pd.read_excel(file_path, sheet_name=None).items(): 
                 st.caption(f"Trang tính: {sheet}")
@@ -63,8 +69,8 @@ st.markdown("### 📑 HỆ THỐNG LẬP HỒ SƠ & CHỨNG TỪ KẾ TOÁN")
 st.caption("Giải pháp tự động hóa lập chứng từ, đề nghị thanh toán và hợp đồng từ hóa đơn / báo giá")
 st.markdown("---")
 
-# Kiểm tra thư mục biểu mẫu
-available_templates = [f for f in os.listdir(TEMPLATE_DIR) if f.endswith(('.xlsx', '.docx'))]
+# Kiểm tra thư mục biểu mẫu (bỏ qua file tạm/lock file mở bởi Office có tiền tố ~$)
+available_templates = [f for f in os.listdir(TEMPLATE_DIR) if f.endswith(('.xlsx', '.docx')) and not f.startswith('~$')]
 
 # BƯỚC 1: KHỞI TẠO HỒ SƠ
 col_top1, col_top2 = st.columns([1, 1], gap="medium")
@@ -109,6 +115,10 @@ if st.session_state.get('uploaded_signatures') != current_signatures:
     st.session_state['uploaded_signatures'] = current_signatures
     if 'data' in st.session_state:
         del st.session_state['data']
+    if '_batch_results' in st.session_state:
+        del st.session_state['_batch_results']
+    if '_last_invoice_results' in st.session_state:
+        del st.session_state['_last_invoice_results']
 
 temp_files_list = st.session_state.get('temp_files_list', [])
 
@@ -123,12 +133,23 @@ with col_left:
     elif len(temp_files_list) == 1:
         item = temp_files_list[0]
         render_file_preview(item["name"], item["path"], unique_idx=0)
-    else:
-        st.caption(f"📑 Đã nạp {len(temp_files_list)} hóa đơn (Chuyển tab để xem từng file):")
-        file_tabs = st.tabs([f"📄 {item['name']}" for item in temp_files_list])
+    elif len(temp_files_list) <= 4:
+        st.caption(f"📑 Đã nạp **{len(temp_files_list)} hóa đơn** (Bấm chọn từng hóa đơn để xem):")
+        file_tabs = st.tabs([f"📄 HĐ #{i+1}" for i in range(len(temp_files_list))])
         for idx, item in enumerate(temp_files_list):
             with file_tabs[idx]:
+                st.caption(f"📎 **Tệp ({idx + 1}/{len(temp_files_list)}):** `{item['name']}`")
                 render_file_preview(item["name"], item["path"], unique_idx=idx)
+    else:
+        st.caption(f"📑 Đã nạp **{len(temp_files_list)} hóa đơn**:")
+        selected_idx = st.selectbox(
+            "Chọn hóa đơn xem trước:",
+            options=list(range(len(temp_files_list))),
+            format_func=lambda i: f"📄 HĐ #{i+1}: {temp_files_list[i]['name']}"
+        )
+        item = temp_files_list[selected_idx]
+        st.caption(f"📎 **Tệp ({selected_idx + 1}/{len(temp_files_list)}):** `{item['name']}`")
+        render_file_preview(item["name"], item["path"], unique_idx=selected_idx)
 
 # CỘT PHẢI: KIỂM DUYỆT THÔNG TIN & ĐỐI CHIẾU
 with col_right:
@@ -146,7 +167,7 @@ with col_right:
         TABLE_TAGS = [
             "stt", "ten_hang_hoa", "don_vi_tinh", "so_luong", "don_gia", "thanh_tien", "tong_cong",
             "tong_tien_hang", "thue_gtgt", "tong_thanh_toan", "so_tien_bang_chu", 
-            "ghi_chu", "muc_dich_su_dung", "ton_kho", "nha_cung_cap", "muc_dich", "tr"
+            "ghi_chu", "tr"
         ]
         
         for tpl in selected_templates:
@@ -164,6 +185,9 @@ with col_right:
         if not API_KEYS:
             st.error("Chưa tìm thấy GEMINI_API_KEYS trong file .env hoặc Secrets. Vui lòng kiểm tra lại cấu hình.")
         else:
+            if '_batch_results' not in st.session_state:
+                st.session_state['_batch_results'] = {}
+
             btn_label = "🔍 Trích xuất thông tin chứng từ" if len(temp_files_list) == 1 else f"🔍 Trích xuất & Gộp {len(temp_files_list)} hóa đơn"
             if st.button(btn_label, type="primary", use_container_width=True):
                 invoice_results = []
@@ -171,28 +195,48 @@ with col_right:
                 status_box = st.empty()
                 total_files = len(temp_files_list)
                 extractor = AIExtractor(API_KEYS)
+                called_ai_count = 0
 
                 for idx, item in enumerate(temp_files_list):
                     fname = item["name"]
                     fpath = item["path"]
 
-                    # Giãn cách 2.0 giây giữa các file để tránh vượt giới hạn tốc độ RPM của AI
-                    if idx > 0:
-                        status_box.caption(f"⏳ Tạm dừng 2s để làm nguội máy chủ AI trước khi bóc tách file {idx + 1}/{total_files}...")
-                        time.sleep(2.0)
+                    # Nếu file này đã được bóc tách thành công ở lần trước trong đợt tải này -> Tận dụng ngay, không tốn thời gian chạy lại
+                    if fname in st.session_state['_batch_results'] and "error" not in st.session_state['_batch_results'][fname]:
+                        cached_data = st.session_state['_batch_results'][fname]
+                        status_box.caption(f"⚡ HĐ {idx + 1}/{total_files} `{fname}`: Đã hoàn tất trước đó (lấy kết quả ngay).")
+                        invoice_results.append({
+                            "filename": fname,
+                            "data": cached_data,
+                            "path": fpath
+                        })
+                        progress_bar.progress((idx + 1) / total_files)
+                        continue
+
+                    # Giãn cách 1.5 giây giữa các lần gọi AI để bảo vệ hạn ngạch RPM
+                    if called_ai_count > 0:
+                        status_box.caption(f"⏳ Tạm dừng 1.5s để bảo toàn hạn ngạch máy chủ AI...")
+                        time.sleep(1.5)
+                    called_ai_count += 1
 
                     status_box.info(f"⏳ Đang bóc tách hóa đơn {idx + 1}/{total_files}: **{fname}**...")
                     progress_bar.progress(idx / total_files)
                     
                     extracted = extractor.extract_invoice_data(fpath, expected_tags=all_dynamic_tags)
+                    if "error" not in extracted:
+                        st.session_state['_batch_results'][fname] = extracted
+
                     invoice_results.append({
                         "filename": fname,
-                        "data": extracted
+                        "data": extracted,
+                        "path": fpath
                     })
 
                 progress_bar.progress(1.0)
                 status_box.empty()
                 progress_bar.empty()
+
+                st.session_state['_last_invoice_results'] = invoice_results
 
                 if len(invoice_results) == 1:
                     merged_res = invoice_results[0]["data"]
@@ -201,6 +245,11 @@ with col_right:
 
                 if "error" not in merged_res:
                     st.session_state['data'] = merged_res
+                    # Xóa các state nhập liệu dyn_ cũ để nạp mới cho các hóa đơn vừa bóc tách
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("dyn_") or k.startswith("readonly_"):
+                            del st.session_state[k]
+
                     meta = merged_res.get("_multi_invoice_meta", {})
                     failed_cnt = meta.get("failed_count", 0)
                     if failed_cnt > 0:
@@ -210,6 +259,43 @@ with col_right:
                         st.toast(success_msg, icon="✅")
                 else:
                     st.error(merged_res['error'])
+
+            # Cứu hộ riêng từng file lỗi để người dùng không phải bóc tách lại cả lô
+            last_results = st.session_state.get('_last_invoice_results', [])
+            failed_items = [item for item in last_results if "error" in item.get("data", {})]
+            if failed_items:
+                st.warning(f"⚠️ Có {len(failed_items)} hóa đơn chưa hoàn thành. Các hóa đơn khác đã được giữ nguyên kết quả:")
+                for f_idx, fail_item in enumerate(failed_items):
+                    f_col1, f_col2 = st.columns([3.5, 1.5])
+                    with f_col1:
+                        st.caption(f"📄 **{fail_item['filename']}**: {fail_item.get('data', {}).get('error')}")
+                    with f_col2:
+                        if st.button(f"🔄 Thử lại `{fail_item['filename']}`", key=f"retry_single_{f_idx}", use_container_width=True):
+                            with st.spinner(f"Đang bóc tách lại riêng '{fail_item['filename']}'..."):
+                                retry_ext = AIExtractor(API_KEYS)
+                                retried_data = retry_ext.extract_invoice_data(fail_item['path'], expected_tags=all_dynamic_tags)
+                                if "error" not in retried_data:
+                                    st.session_state['_batch_results'][fail_item['filename']] = retried_data
+                                    for res in last_results:
+                                        if res['filename'] == fail_item['filename']:
+                                            res['data'] = retried_data
+                                    st.session_state['_last_invoice_results'] = last_results
+
+                                    if len(last_results) == 1:
+                                        new_merged = last_results[0]["data"]
+                                    else:
+                                        new_merged = InvoiceMerger.merge_invoices(last_results)
+
+                                    st.session_state['data'] = new_merged
+                                    for k in list(st.session_state.keys()):
+                                        if k.startswith("dyn_") or k.startswith("readonly_"):
+                                            del st.session_state[k]
+
+                                    st.success(f"Bóc tách thành công `{fail_item['filename']}`!")
+                                    time.sleep(0.8)
+                                    st.rerun()
+                                else:
+                                    st.error(f"Thử lại thất bại: {retried_data.get('error')}")
 
         # Khi đã có dữ liệu trích xuất
         if 'data' in st.session_state:
@@ -242,6 +328,20 @@ with col_right:
                             ai_flat_data[sub_k] = sub_v
                     elif not isinstance(v, list):
                         ai_flat_data[k] = v
+
+            # Đồng bộ thông tin nhà cung cấp từ dữ liệu bóc tách hóa đơn
+            ncc_extracted = (
+                str(ai_flat_data.get("nha_cung_cap") or "") or
+                str(ai_flat_data.get("ten_cong_ty") or "") or
+                str(ai_flat_data.get("ten_cong_ty_ben_b") or "") or
+                str(data.get("thong_tin_nha_cung_cap", {}).get("ten_cong_ty") or "")
+            ).strip()
+
+            if ncc_extracted and not ai_flat_data.get("nha_cung_cap"):
+                ai_flat_data["nha_cung_cap"] = ncc_extracted
+
+            # Số phiếu đề xuất để người dùng tự nhập (không điền sẵn số hóa đơn vào)
+            ai_flat_data["so_phieu"] = ""
             
             final_dynamic_data = {} 
             
@@ -265,9 +365,15 @@ with col_right:
                     "so_phieu": "Số phiếu",
                     "so_hop_dong": "Số hợp đồng",
                     "ten_cong_ty": "Tên công ty",
+                    "nha_cung_cap": "Nhà cung cấp",
+                    "muc_dich": "Mục đích sử dụng",
+                    "muc_dich_su_dung": "Mục đích sử dụng",
+                    "ton_kho": "Tồn kho",
+                    "ton_kh": "Tồn kho",
+                    "chuc_vu": "Chức vụ",
+                    "chuc_vu_ben_b": "Chức vụ Bên B",
                     "ten_cong_ty_ben_b": "Tên công ty Bên B",
                     "nguoi_dai_dien_ben_b": "Người đại diện Bên B",
-                    "chuc_vu_ben_b": "Chức vụ Bên B",
                     "dia_chi": "Địa chỉ",
                     "dia_chi_ben_b": "Địa chỉ Bên B",
                     "ma_so_thue": "Mã số thuế",
@@ -305,17 +411,21 @@ with col_right:
                                 label = TAG_MAPPING.get(tag, tag.replace("_", " ").title())
                                 
                                 with col:
+                                    session_key = f"dyn_{tag}"
                                     if tag not in displayed_tags:
-                                        default_val = str(ai_flat_data.get(tag, "")) 
-                                        final_dynamic_data[tag] = st.text_input(
+                                        default_val = str(ai_flat_data.get(tag, ""))
+                                        if session_key not in st.session_state:
+                                            st.session_state[session_key] = default_val
+                                        
+                                        val_typed = st.text_input(
                                             label, 
-                                            value=default_val, 
-                                            key=f"dyn_{tag}",
+                                            key=session_key,
                                             placeholder=f"Nhập {label.lower()}..."
                                         )
+                                        final_dynamic_data[tag] = val_typed
                                         displayed_tags.add(tag)
                                     else:
-                                        current_val = st.session_state.get(f"dyn_{tag}", final_dynamic_data.get(tag, ""))
+                                        current_val = st.session_state.get(session_key, "")
                                         st.text_input(
                                             f"{label} (Đồng bộ)", 
                                             value=current_val, 
@@ -324,7 +434,7 @@ with col_right:
                                             help="Đã đồng bộ tự động từ biểu mẫu bên trên."
                                         )
             
-            # 2. BẢNG KÊ HÀNG HÓA / DỊCH VỤ
+            # 2. BẢNG KÊ HÀNG HÓA / DỊCH VỤ (KHÓA CHẾ ĐỘ CHỈ ĐỌC)
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("**2. Bảng kê hàng hóa / dịch vụ:**")
             
@@ -332,67 +442,110 @@ with col_right:
             if not ds: 
                 ds = [{"ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 1, "don_gia": 0, "thanh_tien": 0}]
             
+            has_ghi_chu = any(bool(str(item.get("ghi_chu") or "").strip()) for item in ds if isinstance(item, dict))
             fmt_data = []
-            for item in ds:
-                sl = float(item.get("so_luong") or 0)
-                gia = float(item.get("don_gia") or 0)
-                tt = float(item.get("thanh_tien") or (sl * gia))
-                fmt_data.append({
+            for idx_h, item in enumerate(ds):
+                if not isinstance(item, dict):
+                    continue
+                sl = safe_float(item.get("so_luong"), 0.0)
+                gia = safe_float(item.get("don_gia"), 0.0)
+                tt = safe_float(item.get("thanh_tien"), (sl * gia))
+                row_dict = {
+                    "STT": idx_h + 1,
                     "Tên hàng hóa": str(item.get("ten_hang_hoa") or ""), 
                     "ĐVT": str(item.get("don_vi_tinh") or ""), 
-                    "Số lượng": float(sl), 
-                    "Đơn giá": float(gia), 
-                    "Thành tiền": float(tt)
-                })
+                    "Số lượng": sl, 
+                    "Đơn giá": gia, 
+                    "Thành tiền": tt
+                }
+                if has_ghi_chu:
+                    row_dict["Ghi chú / Nguồn HĐ"] = str(item.get("ghi_chu") or "").strip()
+                fmt_data.append(row_dict)
             
-            edited_df = st.data_editor(
+            st.dataframe(
                 pd.DataFrame(fmt_data), 
-                num_rows="dynamic", 
                 use_container_width=True, 
                 hide_index=True
             )
-            
-            danh_sach_da_chinh_sua = edited_df.to_dict('records')
+            st.caption("🔒 **Bảng kê được khóa cố định (Chỉ đọc):** Dữ liệu bảng kê và đơn giá được trích xuất trực tiếp từ hóa đơn/báo giá gốc, không cho phép chỉnh sửa nhằm chống sai lệch và bảo đảm tính minh bạch.")
+
+            # Lấy thông tin chung đồng bộ để gán vào từng dòng bảng kê
+            resolved_ncc = (
+                str(final_dynamic_data.get("nha_cung_cap") or "") or
+                str(final_dynamic_data.get("ten_cong_ty") or "") or
+                str(final_dynamic_data.get("ten_cong_ty_ben_b") or "") or
+                str(ai_flat_data.get("nha_cung_cap") or "") or
+                str(ai_flat_data.get("ten_cong_ty") or "") or
+                ncc_extracted
+            ).strip()
+
+            resolved_muc_dich = (
+                str(final_dynamic_data.get("muc_dich") or "") or
+                str(final_dynamic_data.get("muc_dich_su_dung") or "") or
+                str(ai_flat_data.get("muc_dich") or "") or
+                str(ai_flat_data.get("muc_dich_su_dung") or "")
+            ).strip()
+
+            resolved_ton_kho = (
+                str(final_dynamic_data.get("ton_kho") or "") or
+                str(final_dynamic_data.get("ton_kh") or "") or
+                str(ai_flat_data.get("ton_kho") or "")
+            ).strip()
+
             ds_chuan = []
             sum_thanh_tien = 0.0
-            
-            for item in danh_sach_da_chinh_sua:
-                ten_hh = str(item.get("Tên hàng hóa") or "").strip()
+
+            for item in ds:
+                if not isinstance(item, dict):
+                    continue
+                ten_hh = str(item.get("ten_hang_hoa") or "").strip()
                 if not ten_hh or ten_hh == "None": 
                     continue 
                 
-                sl = float(item.get("Số lượng") or 0)
-                gia = float(item.get("Đơn giá") or 0)
-                tt = float(item.get("Thành tiền") or 0)
+                sl = safe_float(item.get("so_luong"), 0.0)
+                gia = safe_float(item.get("don_gia"), 0.0)
+                tt = safe_float(item.get("thanh_tien"), (sl * gia))
                 if tt == 0 and sl > 0 and gia > 0:
                     tt = sl * gia
                     
                 sum_thanh_tien += tt
+
+                item_ncc = str(item.get("nha_cung_cap") or "").strip() or resolved_ncc
+                item_md = str(item.get("muc_dich") or item.get("muc_dich_su_dung") or "").strip() or resolved_muc_dich
+                item_tk = str(item.get("ton_kho") or item.get("ton_kh") or "").strip() or resolved_ton_kho
+                item_gc = str(item.get("ghi_chu") or "").strip()
+
                 ds_chuan.append({
+                    "stt": len(ds_chuan) + 1,
                     "ten_hang_hoa": ten_hh, 
-                    "don_vi_tinh": str(item.get("ĐVT") or ""),
+                    "don_vi_tinh": str(item.get("don_vi_tinh") or ""),
                     "so_luong": sl, 
                     "don_gia": gia, 
                     "thanh_tien": tt, 
-                    "muc_dich_su_dung": "", 
-                    "ton_kho": "", 
-                    "nha_cung_cap": "", 
-                    "ghi_chu": "", 
-                    "muc_dich": ""
+                    "muc_dich": item_md, 
+                    "muc_dich_su_dung": item_md, 
+                    "ton_kho": item_tk, 
+                    "ton_kh": item_tk, 
+                    "nha_cung_cap": item_ncc, 
+                    "ghi_chu": item_gc
                 })
 
-            # 3. THIẾT LẬP THUẾ VAT & TÍNH TOÁN
+            # 3. THIẾT LẬP THUẾ VAT & TÍNH TOÁN (HỖ TRỢ ĐA THUẾ SUẤT 5%, 8%, 10%)
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("**3. Thiết lập thuế GTGT (VAT):**")
             
-            vat_info = data.get("thong_tin_vat", {})
-            ai_da_bao_gom_vat = vat_info.get("da_bao_gom_vat", False)
-            try:
-                ai_thue_suat = float(vat_info.get("thue_suat", 8))
-            except (ValueError, TypeError):
-                ai_thue_suat = 8.0
-                
-            col_vat1, col_vat2 = st.columns([1.6, 1])
+            vat_info = data.get("thong_tin_vat", {}) if isinstance(data, dict) else {}
+            ai_da_bao_gom_vat = vat_info.get("da_bao_gom_vat", False) if isinstance(vat_info, dict) else False
+            ai_thue_suat = safe_float(vat_info.get("thue_suat", 8), 8.0) if isinstance(vat_info, dict) else 8.0
+
+            # Quét tất cả các mức thuế suất thực tế trong danh sách hàng hóa
+            distinct_rates = sorted(list(set(
+                safe_float(item.get("thue_suat", ai_thue_suat) if item.get("thue_suat") is not None else ai_thue_suat, ai_thue_suat)
+                for item in ds if isinstance(item, dict)
+            )))
+            is_multi_tax = len(distinct_rates) > 1
+
+            col_vat1, col_vat2 = st.columns([1.4, 1.2])
             with col_vat1:
                 vat_mode = st.radio(
                     "Trạng thái thuế trên chứng từ / báo giá gốc:",
@@ -401,29 +554,93 @@ with col_right:
                     horizontal=False
                 )
                 is_vat_included = "Đã bao gồm VAT" in vat_mode
+
             with col_vat2:
-                thue_suat = st.number_input(
-                    "Thuế suất GTGT (%):", 
-                    min_value=0.0, 
-                    max_value=100.0, 
-                    value=ai_thue_suat, 
-                    step=1.0
-                )
+                if is_multi_tax:
+                    st.info(f"💡 Phát hiện đơn hàng có **{len(distinct_rates)} mức thuế**: {', '.join([f'{r:g}%' for r in distinct_rates])}")
+                    tax_mode = st.radio(
+                        "Phương thức tính thuế GTGT:",
+                        options=[f"Theo từng mặt hàng ({', '.join([f'{r:g}%' for r in distinct_rates])})", "Áp dụng một mức thuế chung cho tất cả"],
+                        index=0,
+                        horizontal=False
+                    )
+                    use_item_tax = "Theo từng mặt hàng" in tax_mode
+                    if not use_item_tax:
+                        thue_suat_override = st.number_input("Thuế suất chung (%):", min_value=0.0, max_value=100.0, value=ai_thue_suat, step=1.0)
+                    else:
+                        thue_suat_override = None
+                else:
+                    use_item_tax = False
+                    thue_suat_override = st.number_input(
+                        "Thuế suất GTGT (%):", 
+                        min_value=0.0, 
+                        max_value=100.0, 
+                        value=distinct_rates[0] if distinct_rates else ai_thue_suat, 
+                        step=1.0
+                    )
 
-            # TÍNH TOÁN THEO NGHIỆP VỤ KẾ TOÁN
-            if not is_vat_included:
-                # Trường hợp: Báo giá CHƯA gồm VAT -> Thành tiền là tiền hàng, cộng thuế vào
-                tong_tien_hang = sum_thanh_tien
-                tien_thue = tong_tien_hang * (thue_suat / 100.0)
-                tong_thanh_toan = tong_tien_hang + tien_thue
-            else:
-                # Trường hợp: Báo giá ĐÃ gồm VAT -> Thành tiền trên chứng từ là tổng thanh toán, bóc tách ngược tiền hàng
-                tong_thanh_toan = sum_thanh_tien
-                tong_tien_hang = tong_thanh_toan / (1.0 + (thue_suat / 100.0)) if thue_suat >= 0 else tong_thanh_toan
-                tien_thue = tong_thanh_toan - tong_tien_hang
+            # TÍNH TOÁN THEO TỪNG NHÓM THUẾ SUẤT
+            tax_breakdown = {}
+            for item in ds:
+                if not isinstance(item, dict):
+                    continue
+                sl = safe_float(item.get("so_luong"), 0.0)
+                gia = safe_float(item.get("don_gia"), 0.0)
+                tt = safe_float(item.get("thanh_tien"), (sl * gia))
+                if tt == 0 and sl > 0 and gia > 0:
+                    tt = sl * gia
 
+                if use_item_tax:
+                    r = safe_float(item.get("thue_suat", ai_thue_suat) if item.get("thue_suat") is not None else ai_thue_suat, ai_thue_suat)
+                else:
+                    r = safe_float(thue_suat_override if thue_suat_override is not None else ai_thue_suat, ai_thue_suat)
+
+                if is_vat_included:
+                    thanh_toan_mon = tt
+                    tien_hang_mon = tt / (1.0 + (r / 100.0)) if r >= 0 else tt
+                    tien_thue_mon = thanh_toan_mon - tien_hang_mon
+                else:
+                    tien_hang_mon = tt
+                    tien_thue_mon = tien_hang_mon * (r / 100.0)
+                    thanh_toan_mon = tien_hang_mon + tien_thue_mon
+
+                if r not in tax_breakdown:
+                    tax_breakdown[r] = {"tien_hang": 0.0, "tien_thue": 0.0, "tong_thanh_toan": 0.0, "so_mon": 0}
+                tax_breakdown[r]["tien_hang"] += tien_hang_mon
+                tax_breakdown[r]["tien_thue"] += tien_thue_mon
+                tax_breakdown[r]["tong_thanh_toan"] += thanh_toan_mon
+                tax_breakdown[r]["so_mon"] += 1
+
+            tong_tien_hang = sum(v["tien_hang"] for v in tax_breakdown.values())
+            tien_thue = sum(v["tien_thue"] for v in tax_breakdown.values())
+            tong_thanh_toan = sum(v["tong_thanh_toan"] for v in tax_breakdown.values())
             chu_so_tien = doc_so_tien_vn(tong_thanh_toan)
-            
+
+            # Hiển thị bảng phân rã chi tiết nếu có từ 2 mức thuế khác nhau
+            if len(tax_breakdown) > 1:
+                st.markdown("##### 📊 Bảng phân rã số tiền thuế theo từng mức thuế:")
+                breakdown_table = []
+                for r in sorted(tax_breakdown.keys()):
+                    bv = tax_breakdown[r]
+                    breakdown_table.append({
+                        "Nhóm thuế suất": f"Hàng hóa chịu thuế {r:g}%",
+                        "Số mặt hàng": f"{bv['so_mon']} mục",
+                        "Tiền hàng (chưa thuế)": f"{bv['tien_hang']:,.0f} đ",
+                        "Tiền thuế GTGT": f"{bv['tien_thue']:,.0f} đ",
+                        "Tổng thanh toán": f"{bv['tong_thanh_toan']:,.0f} đ"
+                    })
+                breakdown_table.append({
+                    "Nhóm thuế suất": "👉 TỔNG CỘNG TOÀN BỘ",
+                    "Số mặt hàng": f"{len(ds)} mục",
+                    "Tiền hàng (chưa thuế)": f"{tong_tien_hang:,.0f} đ",
+                    "Tiền thuế GTGT": f"{tien_thue:,.0f} đ",
+                    "Tổng thanh toán": f"{tong_thanh_toan:,.0f} đ"
+                })
+                st.dataframe(pd.DataFrame(breakdown_table), use_container_width=True, hide_index=True)
+
+            breakdown_str_parts = [f"{r:g}%: {tax_breakdown[r]['tien_thue']:,.0f} đ" for r in sorted(tax_breakdown.keys())]
+            tax_summary_detail = " | ".join(breakdown_str_parts) if len(tax_breakdown) > 1 else None
+
             # Hiển thị thẻ tóm tắt tài chính chuẩn mực
             display_financial_summary(
                 tong_tien_hang=tong_tien_hang,
@@ -431,56 +648,97 @@ with col_right:
                 tong_thanh_toan=tong_thanh_toan,
                 chu_so_tien=chu_so_tien,
                 is_vat_included=is_vat_included,
-                thue_suat=thue_suat
+                thue_suat=distinct_rates[0] if (len(distinct_rates) == 1 and not use_item_tax) else (thue_suat_override if not use_item_tax else None),
+                tax_breakdown_str=tax_summary_detail
             )
 
             # 4. XUẤT HỒ SƠ & TẢI VỀ
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("📥 XUẤT TRỌN BỘ HỒ SƠ (.ZIP)", type="primary", use_container_width=True):
-                # Chuẩn bị dữ liệu cho từng dòng hàng hóa
-                for item in ds_chuan:
-                    if is_vat_included:
-                        item["tong_cong"] = f"{item['thanh_tien']:,.0f}"
-                    else:
-                        tong_cong_mon = item["thanh_tien"] * (1.0 + (thue_suat / 100.0))
-                        item["tong_cong"] = f"{tong_cong_mon:,.0f}"
-                
-                final_data = {
-                    **final_dynamic_data, 
-                    "tong_tien_hang": tong_tien_hang, 
-                    "thue_gtgt": tien_thue, 
-                    "tong_thanh_toan": tong_thanh_toan, 
-                    "tong_cong": tong_thanh_toan,
-                    "so_tien_bang_chu": chu_so_tien, 
-                    "danh_sach_hang_hoa": ds_chuan
-                }
-                
-                try:
-                    zip_buffer = io.BytesIO()
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                            for tpl in selected_templates:
-                                tpl_path = os.path.join(TEMPLATE_DIR, tpl)
-                                out_path = os.path.join(tmp_dir, f"HoSo_{tpl}")
-                                
-                                if tpl.endswith('.docx'): 
-                                    DocumentBuilder.fill_word_template(tpl_path, out_path, final_data)
-                                else: 
-                                    DocumentBuilder.fill_excel_template(tpl_path, out_path, final_data)
-                                
-                                zip_file.write(out_path, arcname=f"HoSo_{tpl}")
-                    
-                    st.success("Đã hoàn tất lập trọn bộ hồ sơ chứng từ!")
-                    st.download_button(
-                        label="💾 TẢI VỀ BỘ HỒ SƠ (FILE ZIP)", 
-                        data=zip_buffer.getvalue(), 
-                        file_name="Bo_Ho_So_Chung_Tu.zip", 
-                        mime="application/zip", 
-                        use_container_width=True
-                    )
-                    
-                    ten_doi_tac = final_dynamic_data.get('ten_cong_ty_ben_b', ai_flat_data.get('ten_cong_ty', ''))
-                    display_zalo_message(ten_doi_tac, tong_thanh_toan)
+                if not selected_templates:
+                    st.warning("⚠️ Vui lòng chọn ít nhất 1 biểu mẫu cần xuất ở ô chọn biểu mẫu bên trên.")
+                else:
+                    active_single_rate = distinct_rates[0] if (len(distinct_rates) == 1 and not use_item_tax) else (thue_suat_override if not use_item_tax else None)
+                    for item in ds_chuan:
+                        if not isinstance(item, dict):
+                            continue
+                        if use_item_tax:
+                            r = safe_float(item.get("thue_suat", ai_thue_suat) or ai_thue_suat, ai_thue_suat)
+                        else:
+                            r = safe_float(thue_suat_override if thue_suat_override is not None else ai_thue_suat, ai_thue_suat)
 
-                except Exception as e:
-                    st.error(f"Đã xảy ra lỗi trong quá trình xuất hồ sơ: {str(e)}")
+                        item["thue_suat"] = f"{r:g}%"
+                        item["tien_thue"] = item["thanh_tien"] * (r / 100.0)
+                        if not item.get("gia_niem_yet"):
+                            item["gia_niem_yet"] = item.get("don_gia", 0)
+
+                        if is_vat_included:
+                            item["tong_cong"] = f"{item['thanh_tien']:,.0f}"
+                        else:
+                            tong_cong_mon = item["thanh_tien"] * (1.0 + (r / 100.0))
+                            item["tong_cong"] = f"{tong_cong_mon:,.0f}"
+                    
+                    thue_5_val = tax_breakdown.get(5.0, {}).get("tien_thue", 0.0)
+                    thue_8_val = tax_breakdown.get(8.0, {}).get("tien_thue", 0.0)
+                    thue_10_val = tax_breakdown.get(10.0, {}).get("tien_thue", 0.0)
+                    hang_5_val = tax_breakdown.get(5.0, {}).get("tien_hang", 0.0)
+                    hang_8_val = tax_breakdown.get(8.0, {}).get("tien_hang", 0.0)
+                    hang_10_val = tax_breakdown.get(10.0, {}).get("tien_hang", 0.0)
+
+                    final_data = {
+                        **final_dynamic_data, 
+                        "so_phieu": final_dynamic_data.get("so_phieu", ""),
+                        "nha_cung_cap": resolved_ncc,
+                        "muc_dich": resolved_muc_dich,
+                        "muc_dich_su_dung": resolved_muc_dich,
+                        "ton_kho": resolved_ton_kho,
+                        "ton_kh": resolved_ton_kho,
+                        "tong_tien_hang": tong_tien_hang, 
+                        "thue_gtgt": tien_thue, 
+                        "tong_thanh_toan": tong_thanh_toan, 
+                        "tong_cong": tong_thanh_toan,
+                        "so_tien_bang_chu": chu_so_tien, 
+                        "thue_suat": active_single_rate,
+                        "tax_breakdown": tax_breakdown,
+                        "thue_gtgt_5": thue_5_val,
+                        "thue_5": thue_5_val,
+                        "thue_gtgt_8": thue_8_val,
+                        "thue_8": thue_8_val,
+                        "thue_gtgt_10": thue_10_val,
+                        "thue_10": thue_10_val,
+                        "tien_hang_5": hang_5_val,
+                        "tien_hang_8": hang_8_val,
+                        "tien_hang_10": hang_10_val,
+                        "chi_tiet_thue": tax_summary_detail or "",
+                        "danh_sach_hang_hoa": ds_chuan
+                    }
+                    
+                    try:
+                        zip_buffer = io.BytesIO()
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                for tpl in selected_templates:
+                                    tpl_path = os.path.join(TEMPLATE_DIR, tpl)
+                                    out_path = os.path.join(tmp_dir, f"HoSo_{tpl}")
+                                    
+                                    if tpl.endswith('.docx'): 
+                                        DocumentBuilder.fill_word_template(tpl_path, out_path, final_data)
+                                    else: 
+                                        DocumentBuilder.fill_excel_template(tpl_path, out_path, final_data)
+                                    
+                                    zip_file.write(out_path, arcname=f"HoSo_{tpl}")
+                        
+                        st.success("Đã hoàn tất lập trọn bộ hồ sơ chứng từ!")
+                        st.download_button(
+                            label="💾 TẢI VỀ BỘ HỒ SƠ (FILE ZIP)", 
+                            data=zip_buffer.getvalue(), 
+                            file_name="Bo_Ho_So_Chung_Tu.zip", 
+                            mime="application/zip", 
+                            use_container_width=True
+                        )
+                        
+                        ten_doi_tac = final_dynamic_data.get('ten_cong_ty_ben_b', ai_flat_data.get('ten_cong_ty', ''))
+                        display_zalo_message(ten_doi_tac, tong_thanh_toan)
+
+                    except Exception as e:
+                        st.error(f"Đã xảy ra lỗi trong quá trình xuất hồ sơ: {str(e)}")

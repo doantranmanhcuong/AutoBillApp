@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 # Tự động nạp các biến từ file .env (override=True để luôn cập nhật mới nhất khi chạy local)
@@ -11,9 +12,15 @@ env_multi = os.getenv("GEMINI_API_KEYS", "")
 env_single = os.getenv("GEMINI_API_KEY", "")
 
 if env_multi:
-    API_KEYS.extend([k.strip() for k in env_multi.split(",") if k.strip()])
-if env_single and env_single.strip() not in API_KEYS:
-    API_KEYS.append(env_single.strip())
+    for k in re.split(r'[,;\n\r]+', env_multi):
+        k_clean = k.strip().strip("'").strip('"')
+        if k_clean and k_clean not in API_KEYS:
+            API_KEYS.append(k_clean)
+
+if env_single:
+    s_clean = env_single.strip().strip("'").strip('"')
+    if s_clean and s_clean not in API_KEYS:
+        API_KEYS.append(s_clean)
 
 # 2. Hỗ trợ tự động nạp Streamlit Cloud Secrets khi triển khai online
 try:

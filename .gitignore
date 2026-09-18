@@ -27,6 +27,9 @@ BaoCao_*
 Bo_Ho_So_*
 *.zip
 *.tmp
+~$*
+~*.xlsx
+~*.docx
 
 # Cấu hình trình soạn thảo (IDE)
 .vscode/

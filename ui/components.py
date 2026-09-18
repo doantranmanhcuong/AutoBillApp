@@ -66,9 +66,16 @@ def apply_office_theme():
     </style>
     """, unsafe_allow_html=True)
 
-def display_financial_summary(tong_tien_hang, tien_thue, tong_thanh_toan, chu_so_tien, is_vat_included, thue_suat):
-    """Hiển thị bảng tóm tắt số liệu thanh toán theo chuẩn kế toán"""
-    vat_status_badge = f"(Đã gồm VAT {thue_suat}%)" if is_vat_included else f"(Chưa gồm VAT, thuế {thue_suat}%)"
+def display_financial_summary(tong_tien_hang, tien_thue, tong_thanh_toan, chu_so_tien, is_vat_included, thue_suat=None, tax_breakdown_str=None):
+    """Hiển thị bảng tóm tắt số liệu thanh toán theo chuẩn kế toán (hỗ trợ cả đơn thuế và đa thuế 5%, 8%, 10%)"""
+    if tax_breakdown_str:
+        vat_status_badge = "(Đã gồm VAT)" if is_vat_included else "(Chưa gồm VAT)"
+        tax_label = "Tổng tiền thuế GTGT:"
+        sub_tax_info = f'<div style="font-size: 0.78rem; color: #64748b; margin-top: 5px; line-height: 1.3;">Chi tiết: {tax_breakdown_str}</div>'
+    else:
+        vat_status_badge = f"(Đã gồm VAT {thue_suat}%)" if is_vat_included else f"(Chưa gồm VAT, thuế {thue_suat}%)"
+        tax_label = f"Tiền thuế GTGT ({thue_suat}%):" if thue_suat is not None else "Tiền thuế GTGT:"
+        sub_tax_info = ""
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -81,8 +88,9 @@ def display_financial_summary(tong_tien_hang, tien_thue, tong_thanh_toan, chu_so
     with col2:
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-label">Tiền thuế GTGT ({thue_suat}%):</div>
+            <div class="metric-label">{tax_label}</div>
             <div class="metric-value">{tien_thue:,.0f} đ</div>
+            {sub_tax_info}
         </div>
         """, unsafe_allow_html=True)
     with col3:
