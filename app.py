@@ -727,7 +727,7 @@ with col_right:
 
             vat_info = data.get("thong_tin_vat", {}) if isinstance(data, dict) else {}
             ai_da_bao_gom_vat = vat_info.get("da_bao_gom_vat", False) if isinstance(vat_info, dict) else False
-            ai_thue_suat = safe_float(vat_info.get("thue_suat", 8), 8.0) if isinstance(vat_info, dict) else 8.0
+            ai_thue_suat = safe_float(vat_info.get("thue_suat", 0), 0.0) if isinstance(vat_info, dict) else 0.0
 
             # Quét tất cả các mức thuế suất thực tế trong danh sách hàng hóa
             distinct_rates = sorted(list(set(

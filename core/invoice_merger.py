@@ -178,8 +178,8 @@ class InvoiceMerger:
                 # Thuế suất từng mặt hàng
                 item_thue = hh.get("thue_suat")
                 if item_thue is None or item_thue == "":
-                    item_thue = (inv_data.get("thong_tin_vat") or {}).get("thue_suat", 8.0)
-                item_thue_float = safe_float(item_thue, 8.0)
+                    item_thue = (inv_data.get("thong_tin_vat") or {}).get("thue_suat", 0.0)
+                item_thue_float = safe_float(item_thue, 0.0)
 
                 merged_hang_hoa.append({
                     "stt": current_stt,
@@ -200,11 +200,11 @@ class InvoiceMerger:
 
         # 4. Hợp nhất thông tin VAT
         vat_modes = [bool(((inv.get("data") or {}).get("thong_tin_vat") or {}).get("da_bao_gom_vat", False)) for inv in valid_invoices]
-        vat_rates = [safe_float(((inv.get("data") or {}).get("thong_tin_vat") or {}).get("thue_suat", 8.0), 8.0) for inv in valid_invoices]
+        vat_rates = [safe_float(((inv.get("data") or {}).get("thong_tin_vat") or {}).get("thue_suat", 0.0), 0.0) for inv in valid_invoices]
         
         # Chọn chế độ VAT phổ biến nhất
         da_bao_gom_vat_final = max(set(vat_modes), key=vat_modes.count) if vat_modes else False
-        thue_suat_final = max(set(vat_rates), key=vat_rates.count) if vat_rates else 8.0
+        thue_suat_final = max(set(vat_rates), key=vat_rates.count) if vat_rates else 0.0
 
         if len(set(vat_rates)) > 1:
             canh_bao_tong.append(f"⚠️ Lưu ý: Các hóa đơn có mức thuế suất GTGT khác nhau ({list(set(vat_rates))}%). Mức thuế mặc định được chọn là {thue_suat_final}%.")

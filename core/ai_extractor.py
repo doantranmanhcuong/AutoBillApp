@@ -137,7 +137,7 @@ class AIExtractor:
         2. Trích xuất ĐẦY ĐỦ 100% từng dòng hàng hóa vào 'danh_sach_hang_hoa'.
         3. TUYỆT ĐỐI KHÔNG được tóm tắt, không dùng '...', không được bỏ qua bất kỳ dòng nào dù danh sách có 50 hay 100+ mặt hàng.
         4. Tiền tệ, số lượng là SỐ THỰC (không phẩy, không khoảng trắng, không "VNĐ").
-        5. XÁC ĐỊNH THUẾ VAT: Bóc tách chính xác tỷ lệ % thuế của từng mặt hàng (0, 5, 8, 10...) vào trường `thue_suat` (số thực). Nếu không ghi riêng từng dòng thì lấy thuế suất chung của hóa đơn.
+        5. XÁC ĐỊNH THUẾ VAT: Bóc tách chính xác tỷ lệ % thuế của từng mặt hàng (0, 5, 8, 10...) vào trường `thue_suat` (số thực). Nếu không ghi riêng từng dòng thì lấy thuế suất chung của hóa đơn. Nếu hoàn toàn không có thông tin thuế, hãy để thue_suat là 0.
 
         CẤU TRÚC JSON BẮT BUỘC:
         {{
@@ -154,9 +154,9 @@ class AIExtractor:
           }},
           "thong_tin_chung": {{"loai_chung_tu": "", "so_chung_tu": "", "ngay_thang_nam": ""}},
           "thong_tin_khach_hang": {{"ten_khach_hang": "", "dia_chi": "", "ma_so_thue": "", "so_tai_khoan": "", "ten_ngan_hang": ""}},
-          "danh_sach_hang_hoa": [{{"stt": 1, "ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 0, "don_gia": 0, "thanh_tien": 0, "thue_suat": 8}}],
-          "tong_ket_tien": {{"tong_tien_truoc_thue": 0, "thue_suat_vat": "", "tien_thue_vat": 0, "tong_tien_thanh_toan": 0, "so_tien_viet_bang_chu": ""}},
-          "thong_tin_vat": {{"da_bao_gom_vat": false, "thue_suat": 8}},
+          "danh_sach_hang_hoa": [{{"stt": 1, "ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 0, "don_gia": 0, "thanh_tien": 0, "thue_suat": 0}}],
+          "tong_ket_tien": {{"tong_tien_truoc_thue": 0, "thue_suat_vat": 0, "tien_thue_vat": 0, "tong_tien_thanh_toan": 0, "so_tien_viet_bang_chu": ""}},
+          "thong_tin_vat": {{"da_bao_gom_vat": false, "thue_suat": 0}},
           "thong_tin_dong": {{}},
           "danh_sach_canh_bao": []
         }}
