@@ -86,10 +86,21 @@ available_templates = [f for f in os.listdir(TEMPLATE_DIR) if f.endswith(('.xlsx
 col_top1, col_top2 = st.columns([1, 1], gap="medium")
 with col_top1:
     uploaded_files = st.file_uploader(
-        "📁 1. Tải lên Hóa đơn / Báo giá (Cho phép chọn nhiều hóa đơn cùng NCC):", 
+        "📁 1. Tải lên Hóa đơn / Báo giá (Hỗ trợ: Kéo thả, Chọn file, hoặc Click vào đây rồi ấn Ctrl+V để Dán ảnh):", 
         type=["png", "jpg", "jpeg", "xlsx", "docx", "pdf"],
         accept_multiple_files=True
     )
+
+    if st.button("📝 Không có báo giá? Nhập tay dữ liệu từ đầu", use_container_width=True):
+        st.session_state['manual_mode'] = True
+        st.session_state['data'] = {
+            "thong_tin_nha_cung_cap": {}, "thong_tin_chung": {}, "thong_tin_khach_hang": {},
+            "thong_tin_dong": {}, "thong_tin_vat": {"da_bao_gom_vat": False, "thue_suat": 0.0},
+            "danh_sach_hang_hoa": [{"ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 1, "don_gia": 0, "thanh_tien": 0, "thue_suat": 0.0}]
+        }
+        st.rerun()
+
+
 with col_top2:
     if available_templates:
         selected_templates = st.multiselect(
@@ -135,39 +146,62 @@ if st.session_state.get('uploaded_signatures') != current_signatures:
 temp_files_list = st.session_state.get('temp_files_list', [])
 
 # BƯỚC 2 & 3: GIAO DIỆN 2 CỘT (CHỨNG TỪ GỐC & KIỂM DUYỆT)
-col_left, col_right = st.columns([4.8, 5.2], gap="large")
+is_manual = st.session_state.get('manual_mode', False)
+if is_manual and not temp_files_list:
+    col_left = None
+    col_right = st.container()
+else:
+    col_left, col_right = st.columns([4.8, 5.2], gap="large")
 
-# CỘT TRÁI: HIỂN THỊ CHỨNG TỪ GỐC
-with col_left:
-    st.markdown("##### 🔍 TÀI LIỆU GỐC")
-    if not uploaded_files or not temp_files_list:
-        st.info("Vui lòng tải lên tài liệu ở Bước 1 để bắt đầu xem trước.")
-    elif len(temp_files_list) == 1:
-        item = temp_files_list[0]
-        render_file_preview(item["name"], item["path"], unique_idx=0)
-    elif len(temp_files_list) <= 4:
-        st.caption(f"📑 Đã nạp **{len(temp_files_list)} hóa đơn** (Bấm chọn từng hóa đơn để xem):")
-        file_tabs = st.tabs([f"📄 HĐ #{i+1}" for i in range(len(temp_files_list))])
-        for idx, item in enumerate(temp_files_list):
-            with file_tabs[idx]:
-                st.caption(f"📎 **Tệp ({idx + 1}/{len(temp_files_list)}):** `{item['name']}`")
-                render_file_preview(item["name"], item["path"], unique_idx=idx)
-    else:
-        st.caption(f"📑 Đã nạp **{len(temp_files_list)} hóa đơn**:")
-        selected_idx = st.selectbox(
-            "Chọn hóa đơn xem trước:",
-            options=list(range(len(temp_files_list))),
-            format_func=lambda i: f"📄 HĐ #{i+1}: {temp_files_list[i]['name']}"
-        )
-        item = temp_files_list[selected_idx]
-        st.caption(f"📎 **Tệp ({selected_idx + 1}/{len(temp_files_list)}):** `{item['name']}`")
-        render_file_preview(item["name"], item["path"], unique_idx=selected_idx)
+if col_left:
+    # CỘT TRÁI: HIỂN THỊ CHỨNG TỪ GỐC
+    with col_left:
+        st.markdown("##### 🔍 TÀI LIỆU GỐC")
+        if is_manual:
+            st.info("📝 **Bạn đang ở Chế độ nhập tay 100%**\n\nHệ thống đã mở bảng điền dữ liệu bên phải.\n\nNếu muốn thoát, hãy bấm nút bên dưới.")
+            if st.button("❌ Thoát chế độ nhập tay", use_container_width=True):
+                st.session_state['manual_mode'] = False
+                if 'data' in st.session_state: del st.session_state['data']
+                st.rerun()
+        elif not uploaded_files or not temp_files_list:
+            st.info("Vui lòng tải lên tài liệu ở Bước 1 để bắt đầu xem trước.")
+        elif len(temp_files_list) == 1:
+            item = temp_files_list[0]
+            render_file_preview(item["name"], item["path"], unique_idx=0)
+        elif len(temp_files_list) <= 4:
+            st.caption(f"📑 Đã nạp **{len(temp_files_list)} hóa đơn** (Bấm chọn từng hóa đơn để xem):")
+            file_tabs = st.tabs([f"📄 HĐ #{i+1}" for i in range(len(temp_files_list))])
+            for idx, item in enumerate(temp_files_list):
+                with file_tabs[idx]:
+                    st.caption(f"📎 **Tệp ({idx + 1}/{len(temp_files_list)}):** `{item['name']}`")
+                    render_file_preview(item["name"], item["path"], unique_idx=idx)
+        else:
+            st.caption(f"📑 Đã nạp **{len(temp_files_list)} hóa đơn**:")
+            selected_idx = st.selectbox(
+                "Chọn hóa đơn xem trước:",
+                options=list(range(len(temp_files_list))),
+                format_func=lambda i: f"📄 HĐ #{i+1}: {temp_files_list[i]['name']}"
+            )
+            item = temp_files_list[selected_idx]
+            st.caption(f"📎 **Tệp ({selected_idx + 1}/{len(temp_files_list)}):** `{item['name']}`")
+            render_file_preview(item["name"], item["path"], unique_idx=selected_idx)
 
 # CỘT PHẢI: KIỂM DUYỆT THÔNG TIN & ĐỐI CHIẾU
 with col_right:
-    st.markdown("##### ✍️ KIỂM DUYỆT & ĐỐI CHIẾU THÔNG TIN")
+    if is_manual and not temp_files_list:
+        cols_header = st.columns([7, 3])
+        with cols_header[0]:
+            st.markdown("##### ✍️ KIỂM DUYỆT & ĐỐI CHIẾU THÔNG TIN (CHẾ ĐỘ NHẬP TAY)")
+        with cols_header[1]:
+            if st.button("❌ Thoát chế độ nhập tay", use_container_width=True):
+                st.session_state['manual_mode'] = False
+                if 'data' in st.session_state: del st.session_state['data']
+                st.rerun()
+    else:
+        st.markdown("##### ✍️ KIỂM DUYỆT & ĐỐI CHIẾU THÔNG TIN")
     
-    if not uploaded_files:
+    is_manual = st.session_state.get('manual_mode', False)
+    if not uploaded_files and not is_manual:
         st.info("Chưa có chứng từ nào được nạp.")
     elif not selected_templates:
         st.info("Vui lòng chọn ít nhất 1 biểu mẫu ở ô trên để hệ thống nạp các trường cần điền.")
@@ -194,7 +228,9 @@ with col_right:
             template_tags_map[tpl] = clean_tags
             
         # Nút kích hoạt trích xuất
-        if not API_KEYS:
+        if is_manual:
+            pass # Bỏ qua trích xuất AI
+        elif not API_KEYS:
             st.error("Chưa tìm thấy GEMINI_API_KEYS trong file .env hoặc Secrets. Vui lòng kiểm tra lại cấu hình.")
         else:
             if '_batch_results' not in st.session_state:
@@ -717,14 +753,147 @@ with col_right:
                 str(ai_flat_data.get("ton_kho") or "")
             ).strip()
 
-            # 2. THIẾT LẬP THUẾ VAT & TÍNH TOÁN (HỖ TRỢ ĐA THUẾ SUẤT 5%, 8%, 10%)
+            # 2. BẢNG KÊ HÀNG HÓA & DỊCH VỤ (Giống Excel, tự động tính Thành tiền)
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("**2. Thiết lập thuế GTGT (VAT):**")
+            st.markdown("**2. Bảng kê hàng hóa & dịch vụ (Giống Excel, tự động tính Thành tiền):**")
+            
+            if is_manual:
+                with st.expander("📋 Hỗ trợ nhập nhanh: Dán (Paste) bảng dữ liệu Excel trực tiếp vào đây", expanded=False):
+                    pasted_text = st.text_area("Copy các cột (Tên hàng, ĐVT, Số lượng, Đơn giá) từ Excel và dán (Ctrl+V) vào ô dưới đây:", height=120, key="paste_bottom")
+                    if st.button("🔄 Nạp vào bảng bên dưới"):
+                        if pasted_text.strip():
+                            new_items = []
+                            import csv, io, re
+                            raw_text = pasted_text.strip()
+                            if '\t' not in raw_text:
+                                raw_text = re.sub(r' {2,}', '\t', raw_text)
+                                
+                            reader = csv.reader(io.StringIO(raw_text), delimiter='\t')
+                            for row in reader:
+                                vals = [str(x).strip() for x in row if str(x).strip()]
+                                if not vals: continue
+                                
+                                first_val = vals[0].lower()
+                                if "thành tiền" in first_val or "tổng" in first_val or "cộng" in first_val:
+                                    continue
+                                    
+                                has_stt = bool(re.match(r'^\d+$', vals[0]))
+                                offset = 1 if has_stt else 0
+                                
+                                if len(vals) > offset:
+                                    name = vals[offset].replace('\n', ' ')
+                                    
+                                    def parse_num(s):
+                                        s = s.strip()
+                                        if not s: return -1.0
+                                        last_comma = s.rfind(',')
+                                        last_dot = s.rfind('.')
+                                        if last_comma > last_dot and last_comma >= len(s) - 3:
+                                            s = s.replace('.', '').replace(',', '.')
+                                        elif last_dot > last_comma and last_dot >= len(s) - 3:
+                                            s = s.replace(',', '')
+                                        else:
+                                            s = s.replace(',', '').replace('.', '')
+                                        try: return float(s)
+                                        except: return -1.0
+
+                                    nums_from_end = []
+                                    for v in reversed(vals[offset+1:]):
+                                        val_num = parse_num(v)
+                                        if val_num >= 0:
+                                            nums_from_end.append(val_num)
+                                        else:
+                                            break
+                                            
+                                    qty = 0.0
+                                    price = 0.0
+                                    
+                                    if len(nums_from_end) >= 3:
+                                        qty = nums_from_end[2]
+                                        price = nums_from_end[1]
+                                    elif len(nums_from_end) == 2:
+                                        qty = nums_from_end[1]
+                                        price = nums_from_end[0]
+                                    elif len(nums_from_end) == 1:
+                                        qty = nums_from_end[0]
+                                        
+                                    unit = ""
+                                    total_after_name = len(vals) - 1 - offset
+                                    num_non_number_cols = total_after_name - len(nums_from_end)
+                                    if num_non_number_cols > 0:
+                                        unit = vals[offset+1]
+                                        
+                                    new_items.append({
+                                        "ten_hang_hoa": name, "don_vi_tinh": unit, 
+                                        "so_luong": qty, "don_gia": price, 
+                                        "thanh_tien": qty * price, "thue_suat": 0.0
+                                    })
+                            if new_items:
+                                if 'data' not in st.session_state or not st.session_state['data']:
+                                    st.session_state['data'] = {
+                                        "thong_tin_nha_cung_cap": {}, "thong_tin_chung": {}, "thong_tin_khach_hang": {},
+                                        "thong_tin_dong": {}, "thong_tin_vat": {"da_bao_gom_vat": False, "thue_suat": 0.0},
+                                        "danh_sach_hang_hoa": new_items
+                                    }
+                                else:
+                                    st.session_state['data']['danh_sach_hang_hoa'] = new_items
+                                
+                                if 'items_editor' in st.session_state:
+                                    del st.session_state['items_editor']
+                                st.rerun()
+
+            st.info("💡 **Mẹo:** Bảng tính bên dưới tự động lưu khi bạn gõ xong (Enter hoặc click ra ngoài). Nó đã được cố định focus để không bị văng khi thao tác.")
             
             ds = data.get("danh_sach_hang_hoa", [])
             if not ds: 
-                ds = [{"ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 1, "don_gia": 0, "thanh_tien": 0}]
+                ds = [{"ten_hang_hoa": "", "don_vi_tinh": "", "so_luong": 1, "don_gia": 0, "thanh_tien": 0, "thue_suat": 0.0}]
+            
+            import pandas as pd
+            df_ds = pd.DataFrame(ds)
+            for col in ["ten_hang_hoa", "don_vi_tinh", "so_luong", "don_gia", "thanh_tien", "thue_suat"]:
+                if col not in df_ds.columns:
+                    df_ds[col] = 0.0 if col in ["so_luong", "don_gia", "thanh_tien", "thue_suat"] else ""
+            
+            cols_order = ["ten_hang_hoa", "don_vi_tinh", "so_luong", "don_gia", "thue_suat"]
+            for col in df_ds.columns:
+                if col not in cols_order:
+                    cols_order.append(col)
+            df_ds = df_ds[cols_order]
 
+            df_ds['so_luong'] = pd.to_numeric(df_ds['so_luong'], errors='coerce').fillna(0.0)
+            df_ds['don_gia'] = pd.to_numeric(df_ds['don_gia'], errors='coerce').fillna(0.0)
+
+            st.caption("💡 **Tip:** Gõ xong Số lượng và Đơn giá, hệ thống sẽ tự động cập nhật Thành tiền ở bảng tổng bên dưới. Dùng phím Tab, Mũi tên để di chuyển thoải mái.")
+
+            edited_df = st.data_editor(
+                df_ds, 
+                key="items_editor",
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "ten_hang_hoa": st.column_config.TextColumn("Tên hàng hóa", required=True),
+                    "don_vi_tinh": st.column_config.TextColumn("ĐVT"),
+                    "so_luong": st.column_config.NumberColumn("Số lượng", min_value=0.0, format="%g"),
+                    "don_gia": st.column_config.NumberColumn("Đơn giá", min_value=0.0, format="%g"),
+                    "thue_suat": st.column_config.NumberColumn("Thuế suất (%)", format="%g"),
+                    "thanh_tien": None, 
+                }
+            )
+            
+            ds = edited_df.to_dict('records')
+            for item in ds:
+                try: sl = float(item.get("so_luong") or 0.0)
+                except: sl = 0.0
+                try: dg = float(item.get("don_gia") or 0.0)
+                except: dg = 0.0
+                item["thanh_tien"] = sl * dg
+            st.session_state['data']['danh_sach_hang_hoa'] = ds
+
+            # 3. THIẾT LẬP THUẾ VAT & TÍNH TOÁN (HỖ TRỢ ĐA THUẾ SUẤT 5%, 8%, 10%)
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("**3. Thiết lập & Bóc tách thuế GTGT (VAT):**")
+            
             vat_info = data.get("thong_tin_vat", {}) if isinstance(data, dict) else {}
             ai_da_bao_gom_vat = vat_info.get("da_bao_gom_vat", False) if isinstance(vat_info, dict) else False
             ai_thue_suat = safe_float(vat_info.get("thue_suat", 0), 0.0) if isinstance(vat_info, dict) else 0.0
@@ -770,7 +939,7 @@ with col_right:
                         step=1.0
                     )
 
-            # 3. BẢNG KÊ HÀNG HÓA & TÍNH TOÁN ĐỒNG BỘ 100% (KHÔNG XUNG ĐỘT SỐ LIỆU)
+            # TÍNH TOÁN ĐỒNG BỘ 100% (KHÔNG XUNG ĐỘT SỐ LIỆU)
             ds_chuan = []
             fmt_data = []
             tax_breakdown = {}
@@ -798,15 +967,18 @@ with col_right:
 
                 if is_vat_included:
                     # Đã gồm VAT: Bóc tách tiền thuế từ tổng số tiền trên báo giá
-                    # TUYỆT ĐỐI KHÔNG sửa đơn giá và thành tiền trên báo giá
                     thanh_toan_mon = tt_raw
                     tien_thue_mon = thanh_toan_mon - (thanh_toan_mon / (1.0 + (r / 100.0))) if r > 0 else 0.0
                     tien_hang_mon = thanh_toan_mon - tien_thue_mon
+                    don_gia_chua_thue = gia_raw / (1.0 + (r / 100.0)) if r > 0 else gia_raw
+                    don_gia_gom_thue = gia_raw
                 else:
                     # Chưa gồm VAT: Thành tiền trên báo giá là tiền hàng chưa thuế, cộng thêm thuế
                     tien_hang_mon = tt_raw
                     tien_thue_mon = tien_hang_mon * (r / 100.0)
                     thanh_toan_mon = tien_hang_mon + tien_thue_mon
+                    don_gia_chua_thue = gia_raw
+                    don_gia_gom_thue = gia_raw * (1.0 + (r / 100.0)) if r > 0 else gia_raw
 
                 if r not in tax_breakdown:
                     tax_breakdown[r] = {"tien_hang": 0.0, "tien_thue": 0.0, "tong_thanh_toan": 0.0, "so_mon": 0}
@@ -823,14 +995,16 @@ with col_right:
                 item_gm = item.get("gia_mua") or gia_raw
 
                 # Dòng chuẩn bị cho xuất file biểu mẫu:
-                # BẢO ĐẢM KHỚP 100% ĐƠN GIÁ VÀ THÀNH TIỀN TRÊN BÁO GIÁ GỐC (TUYỆT ĐỐI KHÔNG SỬA)
                 ds_chuan.append({
                     "stt": len(ds_chuan) + 1,
                     "ten_hang_hoa": ten_hh,
                     "don_vi_tinh": str(item.get("don_vi_tinh") or ""),
                     "so_luong": sl,
-                    "don_gia": gia_raw,          # Giữ nguyên 100% đơn giá từ file báo giá
-                    "thanh_tien": tt_raw,        # Giữ nguyên 100% thành tiền từ file báo giá
+                    "don_gia": don_gia_chua_thue,          # Tự động tính đơn giá chưa thuế
+                    "thanh_tien": tien_hang_mon,           # Tự động tính thành tiền chưa thuế
+                    "don_gia_bao_gia": gia_raw,            # Đơn giá gốc trên báo giá
+                    "thanh_tien_bao_gia": tt_raw,          # Thành tiền gốc trên báo giá
+                    "don_gia_gom_vat": don_gia_gom_thue,   # Đơn giá đã bao gồm thuế
                     "thue_suat": f"{r:g}%",
                     "tien_thue": tien_thue_mon,
                     "tong_cong": thanh_toan_mon,
@@ -866,8 +1040,6 @@ with col_right:
             chu_so_tien = doc_so_tien_vn(tong_thanh_toan)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("**3. Bảng kê hàng hóa / dịch vụ:**")
-            st.dataframe(pd.DataFrame(fmt_data), use_container_width=True, hide_index=True)
             if is_vat_included:
                 st.caption(
                     f"🔒 **Bảng kê khớp 100% theo chứng từ / báo giá gốc:** "
@@ -915,7 +1087,7 @@ with col_right:
                 tong_thanh_toan=tong_thanh_toan,
                 chu_so_tien=chu_so_tien,
                 is_vat_included=is_vat_included,
-                thue_suat=distinct_rates[0] if (len(distinct_rates) == 1 and not use_item_tax) else (thue_suat_override if not use_item_tax else None),
+                thue_suat=thue_suat_override if not use_item_tax else None,
                 tax_breakdown_str=tax_summary_detail
             )
 
@@ -926,7 +1098,7 @@ with col_right:
                     st.warning("⚠️ Vui lòng chọn ít nhất 1 biểu mẫu cần xuất ở ô chọn biểu mẫu bên trên.")
                 else:
                     with st.spinner("⏳ Đang tự động điền dữ liệu vào các biểu mẫu và nén file ZIP... Vui lòng đợi trong giây lát."):
-                        active_single_rate = distinct_rates[0] if (len(distinct_rates) == 1 and not use_item_tax) else (thue_suat_override if not use_item_tax else None)
+                        active_single_rate = thue_suat_override if not use_item_tax else None
                         thue_5_val = tax_breakdown.get(5.0, {}).get("tien_thue", 0.0)
                         thue_8_val = tax_breakdown.get(8.0, {}).get("tien_thue", 0.0)
                         thue_10_val = tax_breakdown.get(10.0, {}).get("tien_thue", 0.0)
@@ -1031,8 +1203,10 @@ with col_right:
                                         
                                         zip_file.write(out_path, arcname=f"HoSo_{tpl}")
                             
-                            safe_name_ncc = re.sub(r'[^a-zA-Z0-9_\-]', '_', resolved_ncc).strip('_')
-                            zip_filename = f"Bo_Ho_So_{safe_name_ncc[:25] or 'Chung_Tu'}.zip"
+                            import re
+                            safe_name_ncc = re.sub(r'[\\/*?:"<>|]', "", resolved_ncc).strip()
+                            safe_name_ncc = re.sub(r'\s+', '_', safe_name_ncc)
+                            zip_filename = f"Bo_Ho_So_{safe_name_ncc[:35] or 'Chung_Tu'}.zip"
 
                             st.session_state['ready_zip'] = {
                                 "data": zip_buffer.getvalue(),
